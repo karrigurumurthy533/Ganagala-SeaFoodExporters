@@ -1,3 +1,53 @@
-﻿import { useState } from 'react';
-import { ArrowRight } from 'lucide-react';
-export default function ContactForm() { const [sent,setSent]=useState(false); return <form onSubmit={e=>{e.preventDefault();setSent(true)}} className="grid gap-4 rounded-2xl border border-blue-100 bg-white/90 p-5 shadow-xl shadow-blue-950/10 backdrop-blur sm:grid-cols-2 sm:p-7"><label className="text-xs font-bold text-ocean-950">Your Name<input required name="name" placeholder="Your name" className="mt-2 w-full rounded-xl border border-blue-100 bg-white px-4 py-3 text-sm font-normal outline-none transition focus:border-sky-400 focus:ring-4 focus:ring-sky-100"/></label><label className="text-xs font-bold text-ocean-950">Your Email<input required type="email" name="email" placeholder="you@company.com" className="mt-2 w-full rounded-xl border border-blue-100 bg-white px-4 py-3 text-sm font-normal outline-none transition focus:border-sky-400 focus:ring-4 focus:ring-sky-100"/></label><label className="text-xs font-bold text-ocean-950 sm:col-span-2">Your Message<textarea required name="message" rows={4} placeholder="Tell us what you’re looking for" className="mt-2 w-full resize-y rounded-xl border border-blue-100 bg-white px-4 py-3 text-sm font-normal outline-none transition focus:border-sky-400 focus:ring-4 focus:ring-sky-100"/></label><button className="inline-flex w-fit items-center gap-2 rounded-full bg-ocean-900 px-6 py-3 text-sm font-bold text-white transition hover:bg-sky-600">{sent?'Message Ready':'Send Message'}<ArrowRight size={15}/></button>{sent&&<p role="status" className="self-center text-xs text-green-700">Thanks — your message is ready. Our team will be in touch.</p>}</form>; }
+﻿import { useState } from "react";
+import { ArrowRight } from "lucide-react";
+export default function ContactForm() {
+  const [sent, setSent] = useState(false);
+  return (
+    <form
+      onSubmit={(e) => {
+        e.preventDefault();
+        setSent(true);
+      }}
+      className="grid gap-4 rounded-2xl border border-blue-100 bg-white/90 p-5 shadow-xl shadow-blue-950/10 backdrop-blur sm:grid-cols-2 sm:p-7"
+    >
+      <label className="text-xs font-bold text-ocean-950">
+        Your Name
+        <input
+          required
+          name="name"
+          placeholder="Your name"
+          className="mt-2 w-full rounded-xl border border-blue-100 bg-white px-4 py-3 text-sm font-normal outline-none transition focus:border-sky-400 focus:ring-4 focus:ring-sky-100"
+        />
+      </label>
+      <label className="text-xs font-bold text-ocean-950">
+        Your Email
+        <input
+          required
+          type="email"
+          name="email"
+          placeholder="you@company.com"
+          className="mt-2 w-full rounded-xl border border-blue-100 bg-white px-4 py-3 text-sm font-normal outline-none transition focus:border-sky-400 focus:ring-4 focus:ring-sky-100"
+        />
+      </label>
+      <label className="text-xs font-bold text-ocean-950 sm:col-span-2">
+        Your Message
+        <textarea
+          required
+          name="message"
+          rows={4}
+          placeholder="Tell us what you’re looking for"
+          className="mt-2 w-full resize-y rounded-xl border border-blue-100 bg-white px-4 py-3 text-sm font-normal outline-none transition focus:border-sky-400 focus:ring-4 focus:ring-sky-100"
+        />
+      </label>
+      <button className="inline-flex w-fit items-center gap-2 rounded-full bg-ocean-900 px-6 py-3 text-sm font-bold text-white transition hover:bg-sky-600">
+        {sent ? "Message Ready" : "Send Message"}
+        <ArrowRight size={15} />
+      </button>
+      {sent && (
+        <p role="status" className="self-center text-xs text-green-700">
+          Thanks — your message is ready. Our team will be in touch.
+        </p>
+      )}
+    </form>
+  );
+}

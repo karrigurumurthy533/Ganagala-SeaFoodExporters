@@ -1,0 +1,3 @@
+﻿import PageHero from '../components/PageHero';
+import CheckList from '../components/Content';
+export default function AboutPage() { return <PageHero image="/images/about-scene.png" eyebrow="ABOUT GANAGALA" title={<>A Trusted Name in<br/>Seafood Exports</>} description="Ganagala Seafood Exporters is committed to delivering premium quality seafood to global markets. With a focus on freshness, hygiene and sustainability, we have built a reputation for excellence in the international seafood industry." action="Learn More"><CheckList items={['Premium Quality Products','Global Export Standards','Sustainable Fishing Practices','Customer-Centric Approach']}/></PageHero>; }

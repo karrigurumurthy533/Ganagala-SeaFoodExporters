@@ -1,0 +1,4 @@
+﻿import type { ReactNode } from 'react';
+import { BadgeCheck } from 'lucide-react';
+export default function CheckList({items}: {items: string[]}) { return <ul className="mt-5 grid gap-2.5">{items.map(item => <li key={item} className="flex items-center gap-2.5 text-[13px] font-medium text-ocean-950"><BadgeCheck size={17} className="shrink-0 fill-sky-500 text-white"/>{item}</li>)}</ul>; }
+export function SectionHeading({eyebrow,title,children}: {eyebrow:string;title:string;children?:ReactNode}) { return <div className="mx-auto mb-10 max-w-2xl text-center"><p className="text-[11px] font-extrabold tracking-[.2em] text-sky-600">{eyebrow}</p><h2 className="mt-3 text-3xl font-extrabold tracking-tight text-ocean-950 sm:text-4xl">{title}</h2>{children && <p className="mt-4 leading-7 text-blue-950/65">{children}</p>}</div>; }

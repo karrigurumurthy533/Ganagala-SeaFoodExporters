@@ -13,7 +13,7 @@ export function ProductCategoryStrip() {
       {products.map(({ Icon, icon, name }) => (
         <div
           key={name}
-          className="flex min-h-[46px] flex-col items-center justify-center gap-1 rounded-xl border border-blue-100 bg-white/90 px-1 py-1.5 text-center text-ocean-950 shadow-md shadow-blue-950/5"
+          className="flex min-h-[46px] flex-col items-center justify-center gap-1 rounded-xl border border-blue-100 bg-white px-1 py-1.5 text-center text-ocean-950 shadow-md shadow-blue-950/5 transition duration-300 hover:-translate-y-1 hover:bg-blue-50"
         >
           <span className="text-base leading-none">
             {icon ?? (Icon && <Icon size={17} className="text-sky-600" />)}
@@ -34,7 +34,7 @@ export default function ProductGrid() {
         {products.slice(0, 4).map(({ Icon, icon, name }) => (
           <article
             key={name}
-            className="group rounded-2xl border border-blue-100 bg-white p-5 shadow-sm transition hover:-translate-y-1 hover:shadow-xl"
+            className="group rounded-2xl border border-blue-100 bg-white p-5 shadow-sm transition duration-300 hover:-translate-y-1 hover:bg-blue-50 hover:shadow-xl"
           >
             <span className="grid size-12 place-items-center rounded-xl bg-ice-100 text-sky-600">
               {icon ?? (Icon && <Icon size={24} />)}

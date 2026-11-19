@@ -1,4 +1,4 @@
-﻿import { Mail, MapPin, Phone, ArrowRight } from "lucide-react";
+import { Mail, MapPin, Phone, ArrowRight } from "lucide-react";
 import { useState } from "react";
 function ContactForm() {
   const [sent, setSent] = useState(false);
@@ -67,16 +67,16 @@ export default function ContactPage() {
             partnership opportunities.
           </p>
           <div className="mt-3 grid gap-2 text-[9px] font-medium text-ocean-950 lg:text-xs">
-            <a className="flex items-center gap-2" href="tel:+919876543210">
+            <a className="flex items-center gap-2" href="tel:+919110395281">
               <Phone size={13} />
               +91 9110395281
             </a>
             <a
               className="flex items-center gap-2"
-              href="mailto:info@ganagalaseafood.com"
+              href="mailto:ganagalaseafoodexportesr@gmail.com"
             >
               <Mail size={13} />
-              info@ganagalaseafood.com
+              ganagalaseafoodexportesr@gmail.com
             </a>
             <span className="flex items-center gap-2">
               <MapPin size={13} />

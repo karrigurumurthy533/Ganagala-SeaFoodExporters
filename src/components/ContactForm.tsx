@@ -8,7 +8,7 @@ export default function ContactForm() {
         e.preventDefault();
         setSent(true);
       }}
-      className="grid gap-4 rounded-2xl border border-blue-100 bg-white/90 p-5 shadow-xl shadow-blue-950/10 backdrop-blur sm:grid-cols-2 sm:p-7"
+      className="grid gap-4 rounded-2xl border border-blue-100 bg-white p-5 shadow-xl shadow-blue-950/10 sm:grid-cols-2 sm:p-7"
     >
       <label className="text-xs font-bold text-ocean-950">
         Your Name

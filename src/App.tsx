@@ -7,6 +7,7 @@ import ProcessingPage from "./pages/ProcessingPage";
 import InfrastructurePage from "./pages/InfrastructurePage";
 import MarketsPage from "./pages/MarketsPage";
 import ContactPage from "./pages/ContactPage";
+import CheckoutPage from "./pages/CheckoutPage";
 
 export default function App() {
   return (
@@ -19,6 +20,7 @@ export default function App() {
         <Route path="infrastructure" element={<InfrastructurePage />} />
         <Route path="export-markets" element={<MarketsPage />} />
         <Route path="contact" element={<ContactPage />} />
+        <Route path="checkout" element={<CheckoutPage />} />
         <Route path="*" element={<HomePage />} />
       </Route>
     </Routes>

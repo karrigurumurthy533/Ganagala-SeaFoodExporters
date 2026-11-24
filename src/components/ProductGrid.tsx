@@ -30,8 +30,8 @@ export default function ProductGrid() {
       <SectionHeading eyebrow="OUR RANGE" title="Seafood for every market">
         A carefully selected range prepared to meet your market’s needs.
       </SectionHeading>
-      <div className="mx-auto grid max-w-6xl grid-cols-2 gap-4 md:grid-cols-4">
-        {products.slice(0, 4).map(({ Icon, icon, name }) => (
+      <div className="mx-auto grid max-w-6xl grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-5">
+        {products.map(({ Icon, icon, name }) => (
           <article
             key={name}
             className="group rounded-2xl border border-blue-100 bg-white p-5 shadow-sm transition duration-300 hover:-translate-y-1 hover:bg-blue-50 hover:shadow-xl"

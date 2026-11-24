@@ -14,6 +14,7 @@ const footerLinks = [
   ["/about", "About Us"],
   ["/products", "Our Products"],
   ["/processing-quality", "Processing & Quality"],
+  ["/infrastructure", "Infrastructure"],
   ["/export-markets", "Export Markets"],
   ["/contact", "Contact Us"],
 ] as const;

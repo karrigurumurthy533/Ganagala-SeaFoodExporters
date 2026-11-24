@@ -6,6 +6,10 @@ export default function ContactForm() {
     <form
       onSubmit={(e) => {
         e.preventDefault();
+        const form = new FormData(e.currentTarget);
+        const subject = `Seafood enquiry from ${String(form.get("name"))}`;
+        const body = `Name: ${String(form.get("name"))}\nEmail: ${String(form.get("email"))}\n\n${String(form.get("message"))}`;
+        window.location.href = `mailto:ganagalaseafoodexportesr@gmail.com?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
         setSent(true);
       }}
       className="grid gap-4 rounded-2xl border border-blue-100 bg-white p-5 shadow-xl shadow-blue-950/10 sm:grid-cols-2 sm:p-7"
@@ -45,7 +49,7 @@ export default function ContactForm() {
       </button>
       {sent && (
         <p role="status" className="self-center text-xs text-green-700">
-          Thanks — your message is ready. Our team will be in touch.
+          Your email app is opening with this enquiry ready to send.
         </p>
       )}
     </form>

@@ -3,9 +3,9 @@ import mongoose, { Schema } from 'mongoose';
 const paymentSchema = new Schema({
   orderId: { type: String, required: true, unique: true, index: true },
   cfOrderId: String,
-  paymentSessionId: String,
   customerName: { type: String, required: true, trim: true },
   customerEmail: { type: String, required: true, lowercase: true, trim: true },
+  customerPhone: { type: String, trim: true },
   country: { type: String, required: true, trim: true },
   amount: { type: Number, required: true, min: 1 },
   currency: { type: String, required: true, default: 'INR' },

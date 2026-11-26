@@ -48,6 +48,7 @@ function normalizeCountry(value: unknown): string | null {
 export async function createPaymentOrder(req: Request, res: Response) {
   try {
     const { customerName, customerEmail, country } = req.body ?? {};
+    const rawPhone = req.body?.customerPhone ?? req.body?.customer_phone;
     const amount = Number(req.body?.amount);
 
     const name =
@@ -78,14 +79,21 @@ export async function createPaymentOrder(req: Request, res: Response) {
       });
     }
 
-    // Server-side merchant contact number.
-    // Use a real number authorized for this purpose.
-    const customerPhone = process.env.CASHFREE_MERCHANT_PHONE
-      ?.replace(/\D/g, '');
+    const suppliedPhone =
+      typeof rawPhone === 'string' || typeof rawPhone === 'number'
+        ? String(rawPhone).replace(/\D/g, '')
+        : '';
+
+    if (rawPhone !== undefined && rawPhone !== '' && !/^\d{10,15}$/.test(suppliedPhone)) {
+      return res.status(400).json({ message: 'Enter a valid mobile number.' });
+    }
+
+    const fallbackPhone = process.env.CASHFREE_MERCHANT_PHONE?.replace(/\D/g, '');
+    const customerPhone = suppliedPhone || fallbackPhone;
 
     if (!customerPhone || !/^\d{10,15}$/.test(customerPhone)) {
-      return res.status(500).json({
-        message: 'Cashfree merchant contact number is not configured.'
+      return res.status(400).json({
+        message: 'Enter a valid customer mobile number.'
       });
     }
 
@@ -98,6 +106,7 @@ export async function createPaymentOrder(req: Request, res: Response) {
       currency: 'INR',
       customerName: name,
       customerEmail,
+      customerPhone,
       country: normalizedCountry,
       status: 'CREATED'
     });
@@ -145,7 +154,6 @@ export async function createPaymentOrder(req: Request, res: Response) {
     }
 
     payment.cfOrderId = data.cf_order_id;
-    payment.paymentSessionId = paymentSessionId;
     payment.status = 'PENDING';
 
     await payment.save();

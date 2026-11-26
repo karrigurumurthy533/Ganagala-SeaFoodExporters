@@ -15,7 +15,6 @@ console.log({
 const app = express();
 const allowedOrigins = (process.env.CLIENT_URL || 'https://ganagalaseafoodexporters.com').split(',').map((value) => value.trim()).filter(Boolean);
 app.use(cors({ origin: allowedOrigins }));
-app.use('/api/payments/webhook', express.raw({ type: 'application/json', limit: '256kb' }));
 app.use(express.json({ limit: '32kb' }));
 app.get('/health', (_req, res) => res.json({ status: 'ok' }));
 app.use('/api/payments', paymentRoutes);

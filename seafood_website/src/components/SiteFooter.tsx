@@ -18,6 +18,7 @@ const footerLinks = [
   ["/export-markets", "Export Markets"],
   ["/contact", "Contact Us"],
   ["/privacy-policy", "Privacy Policy"],
+  ["/shipping-delivery-policy", "Shipping & Delivery Policy"],
 ] as const;
 
 export default function SiteFooter() {

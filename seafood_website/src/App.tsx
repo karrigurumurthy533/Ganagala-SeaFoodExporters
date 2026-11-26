@@ -21,6 +21,7 @@ export default function App() {
         <Route path="refund-policy" element={<PolicyPage policy="refund" />} />
         <Route path="terms-and-conditions" element={<PolicyPage policy="terms" />} />
         <Route path="privacy-policy" element={<PolicyPage policy="privacy" />} />
+        <Route path="shipping-delivery-policy" element={<PolicyPage policy="shipping" />} />
         <Route path="*" element={<HomePage />} />
       </Route>
     </Routes>

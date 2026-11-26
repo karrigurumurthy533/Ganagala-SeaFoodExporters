@@ -2,7 +2,7 @@ import type { ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { ArrowLeft, ArrowRight, ShieldCheck } from "lucide-react";
 
-type PolicyKind = "refund" | "terms" | "privacy";
+type PolicyKind = "refund" | "terms" | "privacy" | "shipping";
 type PolicySection = { heading: string; content: ReactNode };
 type PolicyContent = { title: string; effectiveDate: string; intro?: ReactNode; sections: PolicySection[] };
 const contactEmail = "ganagalaseafoodexporters@gmail.com";
@@ -33,6 +33,18 @@ const policies: Record<PolicyKind, PolicyContent> = {
       { heading: "Intellectual Property", content: "All website text, images, logos, and content belong to Ganagala Seafood Exporters and may not be copied or reused without written permission." },
       { heading: "Limitation of Liability", content: "To the extent permitted by Indian law, our maximum liability for any order is limited to the amount paid for that specific order, and we are not liable for indirect or consequential losses." },
       { heading: "Ganagala Seafood Exporters", content: "Ganagala Seafood Exporters - Premium quality seafood delivered to global markets." },
+    ],
+  },
+  shipping: {
+    title: "Shipping & Delivery Policy",
+    effectiveDate: "November 26, 2026",
+    sections: [
+      { heading: "Cold-Chain Dispatch", content: "Ganagala Seafood Exporters dispatches fresh, chilled, and frozen seafood in insulated cold-chain packaging in compliance with FSSAI standards." },
+      { heading: "Processing Time", content: "Orders are processed and dispatched within 24\u201348 hours of payment confirmation, excluding Sundays and holidays, and subject to catch availability." },
+      { heading: "Estimated Delivery Time", content: <>Odisha, Andhra Pradesh &amp; Telangana: 1\u20133 business days.<br />Other serviceable Indian cities: 2\u20135 business days.<br />International exports (IEC CIYPC8532P): as per the air/sea freight schedule in the commercial invoice.</> },
+      { heading: "Shipping Charges", content: "Shipping charges are calculated based on weight, packaging, and destination pincode, and are shown clearly at checkout before payment." },
+      { heading: "Perishable Delivery Rule", content: "Buyers must be available at the delivery address to receive the shipment on time. We are not responsible for spoilage caused by incorrect addresses, unreachable phone numbers, or missed delivery attempts." },
+      { heading: "Tracking & Support", content: <>Tracking details are sent via SMS, WhatsApp, or email upon dispatch. For help, contact {emailLink} or {phoneLink}.</> },
     ],
   },
   privacy: {

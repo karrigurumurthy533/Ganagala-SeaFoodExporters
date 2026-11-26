@@ -9,6 +9,7 @@ const links = [
   ["/products", "Our Products"],
   ["/refund-policy", "Refund Policy"],
   ["/terms-and-conditions", "Terms & Conditions"],
+  ["/shipping-delivery-policy", "Shipping & Delivery"],
   ["/export-markets", "Export Markets"],
   ["/contact", "Contact Us"],
 ] as const;

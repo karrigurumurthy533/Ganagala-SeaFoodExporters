@@ -13,8 +13,6 @@ const paymentSchema = new Schema({
   status: { type: String, enum: ['CREATED', 'PENDING', 'PAID', 'FAILED', 'CANCELLED'], default: 'CREATED', index: true },
   paymentDate: Date,
   rawStatus: String,
-  lastWebhookEvent: String,
-  processedWebhookEvents: { type: [String], default: [] },
 }, { timestamps: true });
 
 export default mongoose.models.Payment || mongoose.model('Payment', paymentSchema);

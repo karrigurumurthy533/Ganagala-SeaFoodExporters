@@ -1,4 +1,4 @@
-﻿import { useState } from "react";
+import { useState } from "react";
 import { Link, NavLink, Outlet, useLocation } from "react-router-dom";
 import { ArrowRight, ChevronDown, Menu, X } from "lucide-react";
 import SiteFooter from "./SiteFooter";
@@ -7,8 +7,8 @@ const links = [
   ["/", "Home"],
   ["/about", "About Us"],
   ["/products", "Our Products"],
-  ["/processing-quality", "Processing & Quality"],
-  ["/infrastructure", "Infrastructure"],
+  ["/refund-policy", "Refund Policy"],
+  ["/terms-and-conditions", "Terms & Conditions"],
   ["/export-markets", "Export Markets"],
   ["/contact", "Contact Us"],
 ] as const;

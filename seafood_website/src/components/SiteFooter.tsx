@@ -13,10 +13,11 @@ const footerLinks = [
   ["/", "Home"],
   ["/about", "About Us"],
   ["/products", "Our Products"],
-  ["/processing-quality", "Processing & Quality"],
-  ["/infrastructure", "Infrastructure"],
+  ["/refund-policy", "Refund & Cancellation"],
+  ["/terms-and-conditions", "Terms & Conditions"],
   ["/export-markets", "Export Markets"],
   ["/contact", "Contact Us"],
+  ["/privacy-policy", "Privacy Policy"],
 ] as const;
 
 export default function SiteFooter() {
@@ -123,7 +124,7 @@ export default function SiteFooter() {
 
       <div className="border-t border-white/10">
         <div className="mx-auto flex max-w-[1440px] flex-col gap-2 px-[6%] py-4 text-xs text-blue-100/55 sm:flex-row sm:items-center sm:justify-between">
-          <span>© {new Date().getFullYear()} Ganagala Seafood Exporters</span>
+          <span>Ã‚Â© {new Date().getFullYear()} Ganagala Seafood Exporters</span>
           <span>Premium Quality | Global Standards</span>
         </div>
       </div>

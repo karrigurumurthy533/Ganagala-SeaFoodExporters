@@ -121,10 +121,14 @@ export async function createPaymentOrder(req: Request, res: Response) {
         ? currencyRaw.trim().toUpperCase()
         : 'INR';
 
-    const customerPhone =
-      normalizePhone(body.customerPhone ?? body.customer_phone ?? nestedCustomer.customer_phone) ??
-      normalizePhone(process.env.CASHFREE_MERCHANT_PHONE);
+    const rawSuppliedPhone =
+      body.customerPhone ?? body.customer_phone ?? nestedCustomer.customer_phone;
+    const suppliedPhone = normalizePhone(rawSuppliedPhone);
+    if (rawSuppliedPhone !== undefined && rawSuppliedPhone !== '' && !suppliedPhone) {
+      return res.status(400).json({ message: 'Enter a valid mobile number.' });
+    }
 
+    const customerPhone = suppliedPhone ?? normalizePhone(process.env.CASHFREE_MERCHANT_PHONE);
     if (!customerPhone) {
       return res.status(400).json({
         message: 'A valid customer phone number (or CASHFREE_MERCHANT_PHONE) is required.',
@@ -155,8 +159,6 @@ export async function createPaymentOrder(req: Request, res: Response) {
 
     const data = cfResponse.data;
     const orderId = typeof data.order_id === 'string' ? data.order_id.trim() : '';
-    const paymentSessionId =
-      typeof data.payment_session_id === 'string' ? data.payment_session_id.trim() : '';
 
     if (orderId) {
       const customerName =
@@ -173,9 +175,9 @@ export async function createPaymentOrder(req: Request, res: Response) {
       await Payment.create({
         orderId,
         cfOrderId: data.cf_order_id != null ? String(data.cf_order_id) : undefined,
-        paymentSessionId: paymentSessionId || undefined,
         customerName,
         customerEmail,
+        customerPhone,
         country,
         amount: Number(data.order_amount ?? amount),
         currency: typeof data.order_currency === 'string' ? data.order_currency : orderCurrency,

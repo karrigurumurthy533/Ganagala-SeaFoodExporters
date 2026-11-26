@@ -99,14 +99,11 @@ function normalizeCustomerId(value: unknown): string {
  */
 export async function createPaymentOrder(req: Request, res: Response) {
   try {
-    const { customerName, customerEmail, country } = req.body ?? {};
-    const rawPhone = req.body?.customerPhone ?? req.body?.customer_phone;
-    const amount = Number(req.body?.amount);
-
-    const name =
-      typeof customerName === 'string'
-        ? customerName.trim().replace(/\s+/g, ' ')
-        : '';
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const nestedCustomer =
+      typeof body.customer_details === 'object' && body.customer_details !== null
+        ? (body.customer_details as Record<string, unknown>)
+        : {};
 
     const amount = Number(body.amount ?? body.order_amount);
     if (
@@ -124,95 +121,72 @@ export async function createPaymentOrder(req: Request, res: Response) {
         ? currencyRaw.trim().toUpperCase()
         : 'INR';
 
-    const customerPhone =
-      normalizePhone(body.customerPhone ?? body.customer_phone ?? nestedCustomer.customer_phone) ??
-      normalizePhone(process.env.CASHFREE_MERCHANT_PHONE);
-
-    if (!customerPhone) {
-      return res.status(400).json({
-        message: 'Enter a valid amount.'
-      });
-    }
-
-    const suppliedPhone =
-      typeof rawPhone === 'string' || typeof rawPhone === 'number'
-        ? String(rawPhone).replace(/\D/g, '')
-        : '';
-
-    if (rawPhone !== undefined && rawPhone !== '' && !/^\d{10,15}$/.test(suppliedPhone)) {
+    const rawSuppliedPhone =
+      body.customerPhone ?? body.customer_phone ?? nestedCustomer.customer_phone;
+    const suppliedPhone = normalizePhone(rawSuppliedPhone);
+    if (rawSuppliedPhone !== undefined && rawSuppliedPhone !== '' && !suppliedPhone) {
       return res.status(400).json({ message: 'Enter a valid mobile number.' });
     }
 
-    const fallbackPhone = process.env.CASHFREE_MERCHANT_PHONE?.replace(/\D/g, '');
-    const customerPhone = suppliedPhone || fallbackPhone;
-
-    if (!customerPhone || !/^\d{10,15}$/.test(customerPhone)) {
+    const customerPhone = suppliedPhone ?? normalizePhone(process.env.CASHFREE_MERCHANT_PHONE);
+    if (!customerPhone) {
       return res.status(400).json({
-        message: 'Enter a valid customer mobile number.'
+        message: 'A valid customer phone number (or CASHFREE_MERCHANT_PHONE) is required.',
       });
     }
 
-    const orderId = `sf_${Date.now()}_${randomUUID()
-      .replaceAll('-', '').slice(0, 16)}`;
+    const customerId = normalizeCustomerId(
+      body.customerId ?? body.customer_id ?? nestedCustomer.customer_id,
+    );
 
-    const payment = await Payment.create({
-      orderId,
-      amount,
-      currency: 'INR',
-      customerName: name,
-      customerEmail,
-      customerPhone,
-      country: normalizedCountry,
-      status: 'CREATED'
-    });
+    const cashfreePayload = {
+      order_currency: orderCurrency,
+      order_amount: amount,
+      customer_details: {
+        customer_id: customerId,
+        customer_phone: customerPhone,
+      },
+    };
 
     const cfResponse = await cashfreeRequest<CashfreeCreateOrderResponse>('/orders', {
       method: 'POST',
-      headers: {
-        'x-idempotency-key': randomUUID()
-      },
-      body: JSON.stringify({
-        order_id: orderId,
-        order_amount: amount,
-        order_currency: 'INR',
-        customer_details: {
-          customer_id: `web_${orderId}`,
-          customer_name: name,
-          customer_email: customerEmail,
-          customer_phone: customerPhone
-        },
-        order_meta: {
-          return_url: returnUrl,
-          payment_methods: 'cc,dc'
-        }
-      })
+      body: JSON.stringify(cashfreePayload),
     });
 
-    const paymentSessionId = typeof data.payment_session_id === 'string'
-      ? data.payment_session_id.trim()
-      : '';
-    console.info('Cashfree order created', {
-      orderId,
-      cfOrderId: data.cf_order_id ?? null,
-      paymentSessionIdPresent: paymentSessionId.length > 0
-    });
-    if (!paymentSessionId) {
-      throw new Error('Cashfree created the order but returned an empty payment_session_id.');
+    if (!cfResponse.ok) {
+      return res.status(cfResponse.status).json(cfResponse.data);
     }
 
-    payment.cfOrderId = data.cf_order_id;
-    payment.status = 'PENDING';
+    const data = cfResponse.data;
+    const orderId = typeof data.order_id === 'string' ? data.order_id.trim() : '';
 
-    await payment.save();
+    if (orderId) {
+      const customerName =
+        typeof body.customerName === 'string' && body.customerName.trim()
+          ? body.customerName.trim()
+          : undefined;
+      const customerEmail =
+        typeof body.customerEmail === 'string' && body.customerEmail.trim()
+          ? body.customerEmail.trim().toLowerCase()
+          : undefined;
+      const country =
+        typeof body.country === 'string' && body.country.trim() ? body.country.trim() : undefined;
 
-    return res.status(201).json({
-      orderId,
-      paymentSessionId,
-      amount,
-      currency: 'INR',
-      cashfreeMode: environment()
-    });
+      await Payment.create({
+        orderId,
+        cfOrderId: data.cf_order_id != null ? String(data.cf_order_id) : undefined,
+        customerName,
+        customerEmail,
+        customerPhone,
+        country,
+        amount: Number(data.order_amount ?? amount),
+        currency: typeof data.order_currency === 'string' ? data.order_currency : orderCurrency,
+        status: 'PENDING',
+        rawStatus: typeof data.order_status === 'string' ? data.order_status : 'ACTIVE',
+      });
+    }
 
+    return res.status(cfResponse.status).json(data);
   } catch (error) {
     console.error('Cashfree create order failed:', error);
     return res.status(502).json({

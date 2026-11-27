@@ -1,5 +1,5 @@
 import type { Request, Response } from 'express';
-import { createPublicKey, createVerify, randomBytes, X509Certificate } from 'node:crypto';
+import { createHash, createPublicKey, createSign, createVerify, randomBytes, X509Certificate } from 'node:crypto';
 import { createRequire } from 'node:module';
 import Payment from '../models/Payment.js';
 
@@ -107,6 +107,11 @@ function checkoutReturnUrl(params: Record<string, string> = {}) {
   return url.toString();
 }
 
+function callbackOrderId(req: Request) {
+  const orderId = typeof req.query.merchantTxnId === 'string' ? req.query.merchantTxnId.trim() : '';
+  return /^SFE[A-Fa-f0-9]{32}$/.test(orderId) ? orderId : '';
+}
+
 function statusFor(raw: unknown): 'PAID' | 'FAILED' | 'PENDING' {
   const status = String(raw ?? '').trim().toUpperCase();
   if (status === 'SENT_FOR_CAPTURE') return 'PAID';
@@ -122,7 +127,9 @@ function getResultFields(result: PaymentResult) {
     status: result.status ?? nested.status,
     gid: result.gid ?? nested.gid,
     amount: result.amount ?? nested.amount ?? nested.Amount ?? nested.totalAmount,
-    currency: result.currency ?? nested.currency ?? nested.txnCurrency ?? nested.Currency,
+    // Status responses may report both cardholder txnCurrency and merchant
+    // settlement Currency. This order is stored in the merchant currency.
+    currency: result.currency ?? result.Currency ?? nested.currency ?? nested.Currency ?? nested.txnCurrency ?? result.txnCurrency,
     merchantId: result.merchantId ?? result['x-gl-merchantId'] ?? nested.merchantId ?? nested['x-gl-merchantId'],
     merchantTxnId: result.merchantTxnId ?? result['x-gl-orderId'] ?? nested.merchantTxnId ?? nested['x-gl-orderId'],
   };
@@ -227,6 +234,31 @@ function validHttpsUrl(value: string) {
   try { return new URL(value).protocol === 'https:'; } catch { return false; }
 }
 
+function createStatusToken(settings: ReturnType<typeof config>) {
+  // The status endpoint is a GET with no body. PayGlocal's JWS format signs
+  // the SHA-256 digest of the request body (the empty string for this request).
+  const now = Date.now();
+  const encode = (value: unknown) => Buffer.from(JSON.stringify(value)).toString('base64url');
+  const header = encode({
+    alg: 'RS256',
+    kid: settings.privateKeyId,
+    iss: settings.merchantId,
+    'x-gl-enc': 'false',
+    'is-digested': 'true',
+  });
+  const payload = encode({
+    digest: createHash('sha256').update('').digest('base64'),
+    digestAlgorithm: 'SHA-256',
+    exp: 300000,
+    iat: String(now),
+  });
+  const signingInput = `${header}.${payload}`;
+  const signer = createSign('RSA-SHA256');
+  signer.update(signingInput);
+  signer.end();
+  return `${signingInput}.${signer.sign(settings.privateKey).toString('base64url')}`;
+}
+
 export async function createPaymentOrder(req: Request, res: Response) {
   let orderId = '';
   try {
@@ -247,12 +279,14 @@ export async function createPaymentOrder(req: Request, res: Response) {
       return res.status(400).json({ message: 'Enter a valid name, email, phone number, and country.' });
     }
 
-    const callbackUrl = required('PAYGLOCAL_CALLBACK_URL');
-    if (!validHttpsUrl(callbackUrl)) throw new Error('PAYGLOCAL_CALLBACK_URL must be a public HTTPS URL.');
+    const callbackBaseUrl = required('PAYGLOCAL_CALLBACK_URL');
+    if (!validHttpsUrl(callbackBaseUrl)) throw new Error('PAYGLOCAL_CALLBACK_URL must be a public HTTPS URL.');
     // Validate required credential configuration before storing a new order.
     config();
 
     orderId = `SFE${randomBytes(16).toString('hex')}`;
+    const callbackUrl = new URL(callbackBaseUrl);
+    callbackUrl.searchParams.set('merchantTxnId', orderId);
     const payment = await Payment.create({
       orderId, customerName: name, customerEmail: email,
       customerPhone: `${phone.callingCode}${phone.phoneNumber}`, country,
@@ -272,7 +306,7 @@ export async function createPaymentOrder(req: Request, res: Response) {
           phoneNumber: phone.phoneNumber,
         },
       },
-      merchantCallbackURL: callbackUrl,
+      merchantCallbackURL: callbackUrl.toString(),
     };
     const result = await gatewayRequest<PaymentResult>(`${API_PATH}/initiate/paycollect`, payload);
     if (!result.ok) {
@@ -299,7 +333,11 @@ export async function createPaymentOrder(req: Request, res: Response) {
       });
       throw new Error('PayGlocal returned an invalid hosted checkout response.');
     }
-    await Payment.updateOne({ orderId }, { $set: { payglocalGid: gid, rawStatus: String(result.data.status ?? 'INPROGRESS') } });
+    const update: Record<string, unknown> = {
+      payglocalGid: gid,
+      rawStatus: String(result.data.status ?? 'INPROGRESS'),
+    };
+    await Payment.updateOne({ orderId }, { $set: update });
     return res.status(201).json({ orderId, redirectUrl, status: 'PENDING', amount, currency });
   } catch (error) {
     console.error('PayGlocal initiation failed', { orderId: orderId || undefined, message: error instanceof Error ? error.message : 'unknown error' });
@@ -314,10 +352,70 @@ export async function getPaymentStatus(req: Request, res: Response) {
     const payment = await Payment.findOne({ orderId });
     if (!payment) return res.status(404).json({ message: 'Order not found.' });
 
-    // Browser return is not proof of payment. Reconcile from the verified callback/webhook first;
-    // optional status lookup can be enabled/configured with PayGlocal if the merchant endpoint is confirmed.
-    return res.json({ orderId, status: payment.status === 'CREATED' ? 'PENDING' : payment.status,
-      amount: payment.amount, currency: payment.currency, rawStatus: payment.rawStatus });
+    if (payment.status === 'PENDING' && payment.payglocalGid) {
+      try {
+        const settings = config();
+        const statusToken = createStatusToken(settings);
+        const response = await fetch(`${settings.baseUrl}${API_PATH}/${encodeURIComponent(payment.payglocalGid)}/status`, {
+          method: 'GET',
+          headers: {
+            Accept: 'application/json',
+            'x-gl-token-external': statusToken,
+            'x-gl-merchantid': settings.merchantId,
+            'x-gl-kid': settings.privateKeyId,
+          },
+          signal: AbortSignal.timeout(10000),
+        });
+        if (response.ok) {
+          const gatewayStatus = await response.json() as PaymentResult;
+          const nested = gatewayStatus.data && typeof gatewayStatus.data === 'object'
+            ? gatewayStatus.data as Record<string, unknown>
+            : {};
+          const fields = getResultFields(gatewayStatus);
+          const receivedGids = [gatewayStatus.gid, nested.gid].filter((value): value is string => typeof value === 'string');
+          const amount = Number(fields.amount);
+          const currency = String(fields.currency ?? '').toUpperCase();
+          const rawStatus = String(gatewayStatus.status ?? nested.status ?? 'UNKNOWN');
+          const amountMatches = fields.amount === undefined ||
+            (Number.isFinite(amount) && Math.abs(amount - payment.amount) <= 0.01);
+          const currencyMatches = fields.currency === undefined || currency === payment.currency;
+          const txnId = String(fields.merchantTxnId ?? '').trim();
+          if ((receivedGids.length === 0 || receivedGids.includes(payment.payglocalGid)) &&
+              (!txnId || txnId === payment.orderId) && amountMatches && currencyMatches) {
+            const status = statusFor(rawStatus);
+            const update: Record<string, unknown> = { status, rawStatus };
+            if (status === 'PAID') update.paymentDate = new Date();
+            await Payment.updateOne({ orderId, status: { $ne: 'PAID' } }, { $set: update });
+          } else {
+            console.error('PayGlocal status response did not match the pending order', { orderId, rawStatus });
+          }
+        } else {
+          const responseText = await response.text();
+          let gatewayError: Record<string, unknown> = {};
+          try { gatewayError = responseText ? JSON.parse(responseText) as Record<string, unknown> : {}; } catch { /* Ignore non-JSON error text. */ }
+          const errorDetails = gatewayError.errors && typeof gatewayError.errors === 'object'
+            ? gatewayError.errors as Record<string, unknown>
+            : {};
+          console.warn('PayGlocal status check was not successful', {
+            orderId,
+            httpStatus: response.status,
+            reasonCode: gatewayError.reasonCode,
+            message: gatewayError.message,
+            detailedMessage: errorDetails.detailedMessage,
+          });
+        }
+      } catch (error) {
+        console.warn('PayGlocal status check failed', {
+          orderId,
+          message: error instanceof Error ? error.message : 'unknown error',
+        });
+      }
+    }
+
+    const currentPayment = await Payment.findOne({ orderId });
+    if (!currentPayment) return res.status(404).json({ message: 'Order not found.' });
+    return res.json({ orderId, status: currentPayment.status === 'CREATED' ? 'PENDING' : currentPayment.status,
+      amount: currentPayment.amount, currency: currentPayment.currency, rawStatus: currentPayment.rawStatus });
   } catch (error) {
     console.error('PayGlocal status lookup failed', { message: error instanceof Error ? error.message : 'unknown error' });
     return res.status(500).json({ message: 'Unable to verify payment status.' });
@@ -327,36 +425,41 @@ export async function getPaymentStatus(req: Request, res: Response) {
 export async function paymentCallback(req: Request, res: Response) {
   try {
     const result = decodeAndVerifyToken(responseToken(req));
-    if (!result) return res.redirect(303, checkoutReturnUrl({ payment: 'verification_failed' }));
+    if (!result) {
+      const orderId = callbackOrderId(req);
+      console.error('PayGlocal callback token could not be verified', {
+        method: req.method,
+        contentType: req.get('content-type'),
+        hasToken: Boolean(responseToken(req)),
+        tokenParts: responseToken(req).split('.').length,
+        orderId: orderId || undefined,
+      });
+      return res.redirect(303, checkoutReturnUrl(orderId
+        ? { order_id: orderId, payment: 'verification_failed' }
+        : { payment: 'verification_failed' }));
+    }
     const payment = await updatePaymentFromVerifiedResult(result);
-    if (!payment) return res.redirect(303, checkoutReturnUrl({ payment: 'order_not_found' }));
+    if (!payment) {
+      const orderId = callbackOrderId(req);
+      return res.redirect(303, checkoutReturnUrl(orderId
+        ? { order_id: orderId, payment: 'order_not_found' }
+        : { payment: 'order_not_found' }));
+    }
     return res.redirect(303, checkoutReturnUrl({ order_id: payment.orderId }));
   } catch (error) {
     console.error('PayGlocal callback failed', { message: error instanceof Error ? error.message : 'unknown error' });
-    return res.redirect(303, checkoutReturnUrl({ payment: 'verification_failed' }));
+    const orderId = callbackOrderId(req);
+    return res.redirect(303, checkoutReturnUrl(orderId
+      ? { order_id: orderId, payment: 'verification_failed' }
+      : { payment: 'verification_failed' }));
   }
 }
 
 // If the callback URL is opened directly in a browser, send the visitor back to the app.
-export function paymentCallbackBrowserReturn(_req: Request, res: Response) {
+export function paymentCallbackBrowserReturn(req: Request, res: Response) {
+  if (responseToken(req)) return paymentCallback(req, res);
+  const orderId = callbackOrderId(req);
+  if (orderId) return res.redirect(303, checkoutReturnUrl({ order_id: orderId, payment: 'return_pending' }));
   return res.redirect(303, checkoutReturnUrl({ payment: 'return_pending' }));
 }
 
-export async function paymentWebhook(req: Request, res: Response) {
-  // PayGlocal documents a JSON webhook and recommends validating merchantId. Acknowledge
-  // immediately, then validate the merchant/order/amount/currency before changing state.
-  res.status(200).json({ received: true });
-  const token = responseToken(req);
-  const event = token
-    ? decodeAndVerifyToken(token)
-    : req.body && typeof req.body === 'object' && !Array.isArray(req.body)
-      ? req.body as Record<string, unknown>
-      : null;
-  if (!event) {
-    console.error('PayGlocal webhook body could not be parsed or its token signature was invalid');
-    return;
-  }
-  void updatePaymentFromVerifiedResult(event).catch((error) => {
-    console.error('PayGlocal webhook reconciliation failed', { message: error instanceof Error ? error.message : 'unknown error' });
-  });
-}

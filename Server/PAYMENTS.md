@@ -24,9 +24,9 @@ The order payload uses `merchantTxnId`, invoice amount/currency, and only the av
 
 1. `POST /api/payments/orders` validates the billing request, stores a pending order, initiates PayCollect, and returns its HTTPS hosted checkout URL.
 2. The browser navigates to PayGlocal. Card entry stays on PayGlocal.
-3. PayGlocal posts an `x-gl-token` to `/api/payments/callback`; the server verifies its RS256 signature using the configured PayGlocal public key, checks MID/order/amount/currency, updates the record, and redirects the browser to `/checkout?order_id=...`.
-4. If PayGlocal registers `/api/payments/webhook` for server-to-server notifications, the endpoint acknowledges delivery immediately, then checks merchant ID/order/amount/currency and reconciles matching JSON events (or verifies a signed `x-gl-token` if sent).
-5. `GET /api/payments/orders/:orderId` returns the locally reconciled state for the checkout page.
+3. PayGlocal returns the browser to `/api/payments/callback`; the server verifies a signed `x-gl-token` when provided and redirects to `/checkout?order_id=...`.
+4. The checkout page calls `GET /api/payments/orders/:orderId`. While the record is pending, the server calls PayGlocal `GET /gl/v1/payments/{gid}/status`, signs the empty GET request using the merchant private key, and sends `x-gl-token-external`, `x-gl-merchantid`, and `x-gl-kid`.
+5. The server validates any transaction identifiers, amount, and currency returned by PayGlocal, saves the status, and returns the updated order. The checkout page shows the success popup only after the saved status is `PAID` (`SENT_FOR_CAPTURE`).
 
 Only `SENT_FOR_CAPTURE` is paid. `AUTHORIZED` remains pending. Declines, cancellation, abandonment, and request errors are failures. A paid order cannot be downgraded by a duplicate or late notification. The installed SDK provides JWE/JWS creation, but no callback verification or payment-status helper; callback verification uses Node's RS256 verifier, and the status endpoint returns the locally reconciled database state. Confirm with PayGlocal that the downloaded public key is the appropriate key for verifying callback signatures.
 
@@ -35,6 +35,5 @@ Only `SENT_FOR_CAPTURE` is paid. `AUTHORIZED` remains pending. Declines, cancell
 - `POST /api/payments/orders`
 - `GET /api/payments/orders/:orderId`
 - `POST /api/payments/callback` (signed browser payment response)
-- `POST /api/payments/webhook` (separate server-to-server notification)
 
-Use PayGlocal UAT payment instruments for end-to-end testing. Do not switch to production until PayGlocal has enabled international card processing and confirmed the merchant's production MID, credentials, currencies, and webhook format.
+Use PayGlocal UAT payment instruments for end-to-end testing. Do not switch to production until PayGlocal has enabled international card processing and confirmed the merchant's production MID, credentials, and currencies.

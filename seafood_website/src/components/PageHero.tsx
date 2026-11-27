@@ -48,25 +48,37 @@ export default function PageHero({
             {description}
           </p>
           {children}
-          {action && (
+          {action && to === "/products" ? (
             <>
               <Link
                 to={to}
-                className={`mt-3 inline-flex items-center gap-2 rounded-full bg-ocean-900 px-4 py-2 text-[10px] font-bold text-white shadow-md shadow-ocean-900/15 transition hover:bg-sky-600 lg:mt-5 lg:px-5 lg:py-2.5 lg:text-xs ${to === "/products" ? "max-[679px]:h-9 max-[679px]:w-[190px] max-[679px]:justify-center" : ""}`}
+                className="mt-3 hidden items-center gap-2 rounded-full bg-ocean-900 px-4 py-2 text-[10px] font-bold text-white shadow-md shadow-ocean-900/15 transition hover:bg-sky-600 lg:mt-5 lg:px-5 lg:py-2.5 lg:text-xs min-[680px]:inline-flex"
               >
                 {action}
                 <ArrowRight size={13} />
               </Link>
-              {to === "/products" && (
-                <Link
-                  to="/checkout"
-                  className="mt-2 flex h-9 w-[190px] items-center justify-center gap-2 rounded-full border border-ocean-900 px-4 py-2 text-[10px] font-bold text-ocean-950 transition hover:bg-ocean-900 hover:text-white min-[680px]:hidden"
-                >
-                  Checkout <ArrowRight size={13} />
-                </Link>
-              )}
+              <Link
+                to="/checkout"
+                className="mt-3 flex h-9 w-[190px] items-center justify-center gap-2 rounded-full bg-ocean-900 px-4 py-2 text-[10px] font-bold text-white shadow-md shadow-ocean-900/15 transition hover:bg-sky-600 min-[680px]:hidden"
+              >
+                Checkout <ArrowRight size={13} />
+              </Link>
+              <Link
+                to={to}
+                className="mt-2 flex h-9 w-[190px] items-center justify-center gap-2 rounded-full border border-ocean-900 bg-white px-4 py-2 text-[10px] font-bold text-ocean-950 transition hover:bg-blue-50 min-[680px]:hidden"
+              >
+                {action} <ArrowRight size={13} />
+              </Link>
             </>
-          )}
+          ) : action ? (
+            <Link
+              to={to}
+              className="mt-3 inline-flex items-center gap-2 rounded-full bg-ocean-900 px-4 py-2 text-[10px] font-bold text-white shadow-md shadow-ocean-900/15 transition hover:bg-sky-600 lg:mt-5 lg:px-5 lg:py-2.5 lg:text-xs"
+            >
+              {action}
+              <ArrowRight size={13} />
+            </Link>
+          ) : null}
         </div>
       </div>
       {bottomContent && (

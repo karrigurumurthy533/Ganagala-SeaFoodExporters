@@ -1,5 +1,5 @@
 import type { Request, Response } from 'express';
-import { randomBytes } from 'node:crypto';
+import { createPublicKey, createVerify, randomBytes, X509Certificate } from 'node:crypto';
 import { createRequire } from 'node:module';
 import Payment from '../models/Payment.js';
 
@@ -31,9 +31,28 @@ function required(name: string) {
 function normalizePem(value: string) {
   let pem = value.replace(/^\uFEFF/, '').replace(/^(['"])([\s\S]*)\1$/, '$2')
     .replace(/\\r\\n/g, '\n').replace(/\\n/g, '\n').replace(/\\r/g, '\n').trim();
+  // dotenv values are sometimes pasted as one uninterrupted PEM line. Restore
+  // the line breaks required by Node's key parser before passing them to jose.
+  const pemParts = pem.match(/^-----BEGIN ([A-Z0-9 ]+)-----([\s\S]*?)-----END \1-----$/);
+  if (pemParts) {
+    const encoded = pemParts[2].replace(/\s/g, '');
+    const lines = encoded.match(/.{1,64}/g) ?? [];
+    pem = `-----BEGIN ${pemParts[1]}-----\n${lines.join('\n')}\n-----END ${pemParts[1]}-----`;
+  }
   if (!pem.includes('-----BEGIN')) {
     const decoded = Buffer.from(pem, 'base64').toString('utf8').trim();
     if (decoded.includes('-----BEGIN')) pem = decoded;
+  }
+  return pem;
+}
+
+function payglocalPublicKey(value: string) {
+  const pem = normalizePem(value);
+  if (pem.includes('-----BEGIN CERTIFICATE-----')) {
+    return new X509Certificate(pem).publicKey.export({ type: 'spki', format: 'pem' }).toString();
+  }
+  if (pem.includes('-----BEGIN RSA PUBLIC KEY-----')) {
+    return createPublicKey(pem).export({ type: 'spki', format: 'pem' }).toString();
   }
   return pem;
 }
@@ -46,15 +65,21 @@ function config() {
     privateKeyId: required('PAYGLOCAL_PRIVATE_KEY_ID'),
     privateKey: normalizePem(required('PAYGLOCAL_PRIVATE_KEY')),
     publicKeyId: required('PAYGLOCAL_PUBLIC_KEY_ID'),
-    publicKey: normalizePem(required('PAYGLOCAL_PUBLIC_KEY')),
+    publicKey: payglocalPublicKey(required('PAYGLOCAL_PUBLIC_KEY')),
     baseUrl: mode === 'production' ? 'https://api.payglocal.in' : 'https://api.uat.payglocal.in',
   };
 }
 
-function decodeToken(token: string): Record<string, unknown> | null {
+function decodeAndVerifyToken(token: string): Record<string, unknown> | null {
   const parts = token.split('.');
   if (parts.length !== 3) return null;
   try {
+    const header = JSON.parse(Buffer.from(parts[0], 'base64url').toString('utf8')) as Record<string, unknown>;
+    if (header.alg !== 'RS256') return null;
+    const verifier = createVerify('RSA-SHA256');
+    verifier.update(`${parts[0]}.${parts[1]}`);
+    verifier.end();
+    if (!verifier.verify(config().publicKey, Buffer.from(parts[2], 'base64url'))) return null;
     return JSON.parse(Buffer.from(parts[1], 'base64url').toString('utf8')) as Record<string, unknown>;
   } catch {
     return null;
@@ -62,9 +87,24 @@ function decodeToken(token: string): Record<string, unknown> | null {
 }
 
 function responseToken(req: Request) {
-  const body = req.body as Record<string, unknown> | undefined;
-  const token = body?.['x-gl-token'] ?? req.get('x-gl-token');
+  const body = req.body as Record<string, unknown> | string | undefined;
+  const token = (body && typeof body === 'object' ? body['x-gl-token'] : undefined) ??
+    req.get('x-gl-token') ?? req.query['x-gl-token'];
   return typeof token === 'string' ? token : '';
+}
+
+function checkoutReturnUrl(params: Record<string, string> = {}) {
+  const configured = (process.env.CLIENT_URL || '').split(',')[0].trim();
+  let origin = 'https://ganagalaseafoodexporters.com';
+  try {
+    const parsed = new URL(configured);
+    if (parsed.protocol === 'https:' || parsed.protocol === 'http:') origin = parsed.origin;
+  } catch {
+    // A display name or malformed CLIENT_URL is not a usable redirect destination.
+  }
+  const url = new URL('/checkout', origin);
+  for (const [key, value] of Object.entries(params)) url.searchParams.set(key, value);
+  return url.toString();
 }
 
 function statusFor(raw: unknown): 'PAID' | 'FAILED' | 'PENDING' {
@@ -83,8 +123,8 @@ function getResultFields(result: PaymentResult) {
     gid: result.gid ?? nested.gid,
     amount: result.amount ?? nested.amount ?? nested.Amount ?? nested.totalAmount,
     currency: result.currency ?? nested.currency ?? nested.txnCurrency ?? nested.Currency,
-    merchantId: result.merchantId ?? result['x-gl-merchantId'] ?? nested.merchantId,
-    merchantTxnId: result.merchantTxnId ?? nested.merchantTxnId,
+    merchantId: result.merchantId ?? result['x-gl-merchantId'] ?? nested.merchantId ?? nested['x-gl-merchantId'],
+    merchantTxnId: result.merchantTxnId ?? result['x-gl-orderId'] ?? nested.merchantTxnId ?? nested['x-gl-orderId'],
   };
 }
 
@@ -97,7 +137,7 @@ async function updatePaymentFromVerifiedResult(result: PaymentResult) {
   const merchantId = config().merchantId;
   const amount = Number(fields.amount);
   const currency = String(fields.currency ?? '').toUpperCase();
-  if (fields.merchantId != null && String(fields.merchantId) !== merchantId) throw new Error('Merchant mismatch.');
+  if (String(fields.merchantId ?? '') !== merchantId) throw new Error('Merchant mismatch.');
   if (!Number.isFinite(amount) || Math.abs(amount - payment.amount) > 0.01 || currency !== payment.currency) {
     throw new Error('Payment details do not match the order.');
   }
@@ -228,7 +268,6 @@ export async function createPaymentOrder(req: Request, res: Response) {
           firstName,
           lastName,
           emailId: email,
-          addressCountry: isoCountry,
           callingCode: phone.callingCode,
           phoneNumber: phone.phoneNumber,
         },
@@ -247,6 +286,17 @@ export async function createPaymentOrder(req: Request, res: Response) {
     const redirectUrl = String(nested.redirectUrl ?? result.data.redirectUrl ?? '');
     const gid = String(result.data.gid ?? nested.gid ?? '');
     if (!redirectUrl || !gid || !validHttpsUrl(redirectUrl)) {
+      console.error('PayGlocal response did not include a valid hosted checkout URL', {
+        orderId,
+        httpStatus: result.status,
+        gatewayStatus: result.data.status,
+        reasonCode: result.data.reasonCode,
+        message: result.data.message,
+        responseFields: Object.keys(result.data),
+        dataFields: Object.keys(nested),
+        hasGid: Boolean(gid),
+        hasRedirectUrl: Boolean(redirectUrl),
+      });
       throw new Error('PayGlocal returned an invalid hosted checkout response.');
     }
     await Payment.updateOne({ orderId }, { $set: { payglocalGid: gid, rawStatus: String(result.data.status ?? 'INPROGRESS') } });
@@ -276,31 +326,34 @@ export async function getPaymentStatus(req: Request, res: Response) {
 
 export async function paymentCallback(req: Request, res: Response) {
   try {
-    const result = decodeToken(responseToken(req));
-    if (!result) return res.status(401).send('Invalid payment signature.');
+    const result = decodeAndVerifyToken(responseToken(req));
+    if (!result) return res.redirect(303, checkoutReturnUrl({ payment: 'verification_failed' }));
     const payment = await updatePaymentFromVerifiedResult(result);
-    if (!payment) return res.status(404).send('Order not found.');
-    const clientUrl = (process.env.CLIENT_URL || '').split(',')[0].trim();
-    if (!clientUrl) return res.status(200).send('Payment response received.');
-    return res.redirect(303, `${clientUrl.replace(/\/$/, '')}/checkout?order_id=${encodeURIComponent(payment.orderId)}`);
+    if (!payment) return res.redirect(303, checkoutReturnUrl({ payment: 'order_not_found' }));
+    return res.redirect(303, checkoutReturnUrl({ order_id: payment.orderId }));
   } catch (error) {
     console.error('PayGlocal callback failed', { message: error instanceof Error ? error.message : 'unknown error' });
-    return res.status(400).send('Unable to process payment response.');
+    return res.redirect(303, checkoutReturnUrl({ payment: 'verification_failed' }));
   }
 }
 
+// If the callback URL is opened directly in a browser, send the visitor back to the app.
+export function paymentCallbackBrowserReturn(_req: Request, res: Response) {
+  return res.redirect(303, checkoutReturnUrl({ payment: 'return_pending' }));
+}
+
 export async function paymentWebhook(req: Request, res: Response) {
-  // Acknowledge promptly. The public webhook guide shows unsigned JSON but does not
-  // document a verification mechanism; never update payment records from unsigned data.
+  // PayGlocal documents a JSON webhook and recommends validating merchantId. Acknowledge
+  // immediately, then validate the merchant/order/amount/currency before changing state.
   res.status(200).json({ received: true });
   const token = responseToken(req);
-  if (!token) {
-    console.error('PayGlocal webhook received without a signed x-gl-token; no payment state changed');
-    return;
-  }
-  const event = decodeToken(token);
+  const event = token
+    ? decodeAndVerifyToken(token)
+    : req.body && typeof req.body === 'object' && !Array.isArray(req.body)
+      ? req.body as Record<string, unknown>
+      : null;
   if (!event) {
-    console.error('PayGlocal webhook could not be verified or parsed');
+    console.error('PayGlocal webhook body could not be parsed or its token signature was invalid');
     return;
   }
   void updatePaymentFromVerifiedResult(event).catch((error) => {

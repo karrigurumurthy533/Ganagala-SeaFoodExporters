@@ -85,11 +85,25 @@ export default function CheckoutPage() {
   useEffect(() => {
     if (orderId) {
       void checkStatus(orderId);
+      const pollId = window.setInterval(() => void checkStatus(orderId), 4000);
+      const stopId = window.setTimeout(() => window.clearInterval(pollId), 60000);
+      return () => {
+        window.clearInterval(pollId);
+        window.clearTimeout(stopId);
+      };
     } else {
       setStatus("");
       setVerifiedAmount(null);
+      const returnState = searchParams.get("payment");
+      if (returnState === "verification_failed") {
+        setError("We returned from PayGlocal, but could not verify the payment response. Please contact support before trying again.");
+      } else if (returnState === "order_not_found") {
+        setError("We returned from PayGlocal, but could not match the payment to an order. Please contact support.");
+      } else if (returnState === "return_pending") {
+        setError("You are back at checkout. Payment status will appear here after PayGlocal sends its callback.");
+      }
     }
-  }, [orderId]);
+  }, [orderId, searchParams]);
 
   async function startPayment(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -177,7 +191,7 @@ export default function CheckoutPage() {
                     ? "PayGlocal confirmed your payment. Your payment record has been saved."
                     : failed
                       ? "PayGlocal did not confirm a successful payment. You can return to checkout to retry."
-                      : "We are checking your payment directly with PayGlocal. This page will not treat a browser response as confirmation."}
+                      : "We are waiting for the verified payment update. This page checks your order status automatically."}
                 </p>
                 <p className="mt-4 break-all text-xs text-blue-950/50">Order reference: {orderId}</p>
                 {pending && (
@@ -318,6 +332,43 @@ export default function CheckoutPage() {
           </aside>
         </div>
       </div>
+      {paid && orderId && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/55 px-5 py-8 backdrop-blur-sm">
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="payment-success-title"
+            className="w-full max-w-md overflow-hidden rounded-[2rem] bg-white text-center shadow-2xl shadow-slate-950/30"
+          >
+            <div className="bg-gradient-to-br from-emerald-500 via-teal-500 to-sky-600 px-8 pb-10 pt-9 text-white">
+              <div className="mx-auto flex h-20 w-20 items-center justify-center rounded-full border border-white/35 bg-white/15 shadow-inner">
+                <CheckCircle2 size={48} strokeWidth={1.8} />
+              </div>
+              <p className="mt-5 text-xs font-extrabold tracking-[.24em] text-white/80">PAYMENT CONFIRMED</p>
+              <h2 id="payment-success-title" className="mt-2 text-3xl font-extrabold">Thank you!</h2>
+              <p className="mt-2 text-sm text-white/85">Your payment was successful.</p>
+            </div>
+            <div className="px-8 pb-8 pt-6">
+              {verifiedAmount && (
+                <p className="text-3xl font-extrabold text-ocean-950">
+                  {verifiedAmount.currency === "INR" ? "₹" : `${verifiedAmount.currency} `}
+                  {verifiedAmount.amount.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                </p>
+              )}
+              <p className="mt-3 text-sm leading-6 text-blue-950/65">
+                PayGlocal confirmed the transaction. Your order reference is shown below.
+              </p>
+              <p className="mt-4 rounded-xl bg-ice-50 px-4 py-3 text-xs font-bold text-ocean-900">{orderId}</p>
+              <Link
+                to="/"
+                className="mt-6 inline-flex w-full items-center justify-center rounded-xl bg-ocean-900 px-6 py-4 text-sm font-extrabold text-white shadow-lg transition hover:bg-sky-600"
+              >
+                Return to Ganagala Seafood
+              </Link>
+            </div>
+          </div>
+        </div>
+      )}
     </section>
   );
 }

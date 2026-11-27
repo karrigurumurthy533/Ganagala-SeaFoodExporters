@@ -9,7 +9,7 @@ const paymentSchema = new Schema({
   country: { type: String, trim: true },
   amount: { type: Number, required: true, min: 1 },
   currency: { type: String, required: true, default: 'INR' },
-  status: { type: String, enum: ['CREATED', 'PENDING', 'PAID', 'FAILED', 'CANCELLED'], default: 'CREATED', index: true },
+  status: { type: String, enum: ['CREATED', 'PENDING', 'PAID', 'FAILED', 'CANCELLED'], default: 'PENDING', index: true },
   paymentDate: Date,
   rawStatus: String,
 }, { timestamps: true });

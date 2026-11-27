@@ -115,7 +115,7 @@ export default function CheckoutPage() {
           body: JSON.stringify({
             customerName: values.get("customerName"),
             customerEmail: values.get("customerEmail"),
-            customerPhone: phoneDigits,
+            customerPhone: phoneInput,
             amount: numericAmount,
             currency: "INR",
             country: values.get("country"),

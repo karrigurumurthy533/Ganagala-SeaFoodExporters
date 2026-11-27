@@ -1,185 +1,258 @@
-﻿import type { Request, Response } from 'express';
-import { createPrivateKey, createSign, createVerify, randomBytes, type KeyObject } from 'node:crypto';
+import type { Request, Response } from 'express';
+import { randomBytes } from 'node:crypto';
 import { createRequire } from 'node:module';
 import Payment from '../models/Payment.js';
 
+// PayGlocal's official Node SDK creates the encrypted JWE and signed JWS.
 const require = createRequire(import.meta.url);
 const { generateJWEAndJWS } = require('payglocal-js-client') as {
-  generateJWEAndJWS(input: { payload: Record<string, unknown>; publicKey: string; privateKey: string; merchantId: string; privateKeyId: string; publicKeyId: string }): Promise<{ jweToken: string; jwsToken: string }>;
+  generateJWEAndJWS(input: {
+    payload: Record<string, unknown>;
+    publicKey: string;
+    privateKey: string;
+    merchantId: string;
+    privateKeyId: string;
+    publicKeyId: string;
+  }): Promise<{ jweToken: string; jwsToken: string }>;
 };
 
 const API_PATH = '/gl/v1/payments';
-const PAYCOLLECT_PATH = `${API_PATH}/initiate/paycollect`;
-type GatewayStatus = Record<string, unknown> & { gid?: string; status?: string; data?: Record<string, unknown> };
+const TERMINAL_FAILURES = new Set([
+  'ISSUER_DECLINE', 'GENERAL_DECLINE', 'CUSTOMER_CANCELLED', 'ABANDONED', 'REQUEST_ERROR', 'FAILED',
+]);
+type PaymentResult = Record<string, unknown> & { gid?: string; status?: string };
 
-function config() {
-  const mid = process.env.PAYGLOCAL_MERCHANT_ID?.trim();
-  const kid = process.env.PAYGLOCAL_PRIVATE_KEY_ID?.trim();
-  const privateKeyValue = process.env.PAYGLOCAL_PRIVATE_KEY?.trim();
-  const publicKeyValue = process.env.PAYGLOCAL_PUBLIC_KEY?.trim();
-  const publicKid = process.env.PAYGLOCAL_PUBLIC_KEY_ID?.trim();
-  if (!mid || !kid || !privateKeyValue || !publicKeyValue || !publicKid) throw new Error('PayGlocal credentials are not configured.');
-  let pem = privateKeyValue.replace(/^\uFEFF/, '').replace(/^(['"])([\s\S]*)\1$/, '$2');
-  pem = pem.replace(/\\r\\n/g, '\n').replace(/\\n/g, '\n').replace(/\\r/g, '\n');
+function required(name: string) {
+  const value = process.env[name]?.trim();
+  if (!value) throw new Error(`${name} is not configured.`);
+  return value;
+}
+
+function normalizePem(value: string) {
+  let pem = value.replace(/^\uFEFF/, '').replace(/^(['"])([\s\S]*)\1$/, '$2')
+    .replace(/\\r\\n/g, '\n').replace(/\\n/g, '\n').replace(/\\r/g, '\n').trim();
   if (!pem.includes('-----BEGIN')) {
     const decoded = Buffer.from(pem, 'base64').toString('utf8').trim();
     if (decoded.includes('-----BEGIN')) pem = decoded;
   }
-  let privateKey: KeyObject;
-  try {
-    const passphrase = process.env.PAYGLOCAL_PRIVATE_KEY_PASSPHRASE;
-    privateKey = createPrivateKey(passphrase ? { key: pem, format: 'pem', passphrase } : { key: pem, format: 'pem' });
-    if (privateKey.asymmetricKeyType !== 'rsa' && privateKey.asymmetricKeyType !== 'rsa-pss') {
-      throw new Error('unsupported asymmetric key type');
-    }
-  } catch {
-    throw new Error('PAYGLOCAL_PRIVATE_KEY must be a valid RSA PEM key. Use escaped \\n line breaks, base64-encoded PEM, or configure its passphrase if encrypted.');
-  }
+  return pem;
+}
+
+function config() {
   const mode = (process.env.PAYGLOCAL_ENV || 'uat').trim().toLowerCase();
   if (mode !== 'uat' && mode !== 'production') throw new Error('PAYGLOCAL_ENV must be uat or production.');
-  let publicKey = publicKeyValue.replace(/^(['"])([\s\S]*)\1$/, '$2').replace(/\\r\\n/g, '\n').replace(/\\n/g, '\n').trim();
-  if (!publicKey.includes('-----BEGIN')) {
-    const decoded = Buffer.from(publicKey, 'base64').toString('utf8').trim();
-    if (decoded.includes('-----BEGIN')) publicKey = decoded;
-  }
-  return { mid, kid, privateKey, publicKey, publicKid, baseUrl: mode === 'production' ? 'https://api.payglocal.in' : 'https://api.uat.payglocal.in' };
+  return {
+    merchantId: required('PAYGLOCAL_MERCHANT_ID'),
+    privateKeyId: required('PAYGLOCAL_PRIVATE_KEY_ID'),
+    privateKey: normalizePem(required('PAYGLOCAL_PRIVATE_KEY')),
+    publicKeyId: required('PAYGLOCAL_PUBLIC_KEY_ID'),
+    publicKey: normalizePem(required('PAYGLOCAL_PUBLIC_KEY')),
+    baseUrl: mode === 'production' ? 'https://api.payglocal.in' : 'https://api.uat.payglocal.in',
+  };
 }
 
-function payglocalPublicCertificate() {
-  const certificate = process.env.PAYGLOCAL_PUBLIC_CERT?.replace(/\\n/g, '\n').trim();
-  if (!certificate) throw new Error('PAYGLOCAL_PUBLIC_CERT is not configured.');
-  return certificate;
-}
-
-function b64url(value: string | Buffer) { return Buffer.from(value).toString('base64url'); }
-function signedToken(payload: unknown) {
-  const { mid, kid, privateKey } = config();
-  const header = b64url(JSON.stringify({ alg: 'RS256', kid, iss: mid, 'x-gl-enc': 'false', 'is-digested': 'false' }));
-  const body = b64url(JSON.stringify(payload));
-  const signingInput = `${header}.${body}`;
-  const signer = createSign('RSA-SHA256');
-  signer.update(signingInput);
-  signer.end();
-  return `${signingInput}.${signer.sign(privateKey).toString('base64url')}`;
-}
-
-function verifyCallbackToken(token: string) {
+function decodeToken(token: string): Record<string, unknown> | null {
   const parts = token.split('.');
   if (parts.length !== 3) return null;
-  const verifier = createVerify('RSA-SHA256');
-  verifier.update(`${parts[0]}.${parts[1]}`);
-  verifier.end();
-  if (!verifier.verify(payglocalPublicCertificate(), Buffer.from(parts[2], 'base64url'))) return null;
-  return JSON.parse(Buffer.from(parts[1], 'base64url').toString('utf8')) as Record<string, unknown>;
+  try {
+    return JSON.parse(Buffer.from(parts[1], 'base64url').toString('utf8')) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
 }
 
-async function gatewayRequest<T>(path: string, method: 'GET' | 'POST', payload?: unknown) {
-  const { mid, kid, privateKey, publicKey, publicKid, baseUrl } = config();
-  const transactionPayload = payload as Record<string, unknown> | undefined;
-  const auth = method === 'POST' && transactionPayload
-    ? await generateJWEAndJWS({
-      payload: transactionPayload,
-      publicKey,
-      privateKey: privateKey.export({ format: 'pem', type: 'pkcs8' }).toString(),
-      merchantId: mid,
-      privateKeyId: kid,
-      publicKeyId: publicKid,
-    })
-    : { jweToken: undefined, jwsToken: signedToken(payload ?? {}) };
-  const response = await fetch(`${baseUrl}${path}`, {
-    method,
+function responseToken(req: Request) {
+  const body = req.body as Record<string, unknown> | undefined;
+  const token = body?.['x-gl-token'] ?? req.get('x-gl-token');
+  return typeof token === 'string' ? token : '';
+}
+
+function statusFor(raw: unknown): 'PAID' | 'FAILED' | 'PENDING' {
+  const status = String(raw ?? '').trim().toUpperCase();
+  if (status === 'SENT_FOR_CAPTURE') return 'PAID';
+  if (TERMINAL_FAILURES.has(status)) return 'FAILED';
+  return 'PENDING';
+}
+
+function getResultFields(result: PaymentResult) {
+  const nested = result.data && typeof result.data === 'object'
+    ? result.data as Record<string, unknown>
+    : {};
+  return {
+    status: result.status ?? nested.status,
+    gid: result.gid ?? nested.gid,
+    amount: result.amount ?? nested.amount ?? nested.Amount ?? nested.totalAmount,
+    currency: result.currency ?? nested.currency ?? nested.txnCurrency ?? nested.Currency,
+    merchantId: result.merchantId ?? result['x-gl-merchantId'] ?? nested.merchantId,
+    merchantTxnId: result.merchantTxnId ?? nested.merchantTxnId,
+  };
+}
+
+async function updatePaymentFromVerifiedResult(result: PaymentResult) {
+  const fields = getResultFields(result);
+  const orderId = String(fields.merchantTxnId ?? '').trim();
+  const payment = await Payment.findOne({ orderId });
+  if (!payment) return null;
+
+  const merchantId = config().merchantId;
+  const amount = Number(fields.amount);
+  const currency = String(fields.currency ?? '').toUpperCase();
+  if (fields.merchantId != null && String(fields.merchantId) !== merchantId) throw new Error('Merchant mismatch.');
+  if (!Number.isFinite(amount) || Math.abs(amount - payment.amount) > 0.01 || currency !== payment.currency) {
+    throw new Error('Payment details do not match the order.');
+  }
+
+  const status = statusFor(fields.status);
+  if (payment.status !== 'PAID') {
+    const update: Record<string, unknown> = { status, rawStatus: String(fields.status ?? 'UNKNOWN') };
+    if (status === 'PAID') update.paymentDate = new Date();
+    if (typeof fields.gid === 'string') update.payglocalGid = fields.gid;
+    await Payment.updateOne({ orderId, status: { $ne: 'PAID' } }, { $set: update });
+  }
+  return Payment.findOne({ orderId });
+}
+
+async function gatewayRequest<T extends Record<string, unknown>>(path: string, payload: Record<string, unknown>) {
+  const settings = config();
+  const tokens = await generateJWEAndJWS({
+    payload,
+    publicKey: settings.publicKey,
+    privateKey: settings.privateKey,
+    merchantId: settings.merchantId,
+    privateKeyId: settings.privateKeyId,
+    publicKeyId: settings.publicKeyId,
+  });
+
+  const response = await fetch(`${settings.baseUrl}${path}`, {
+    method: 'POST',
     headers: {
       Accept: 'application/json',
-      'Content-Type': 'application/json',
-      'x-gl-token-external': auth.jwsToken,
-      'x-gl-merchantid': mid,
-      'x-gl-kid': kid,
+      'Content-Type': 'text/plain',
+      'x-gl-token-external': tokens.jwsToken,
     },
-    ...(method === 'POST' ? { body: JSON.stringify(auth.jweToken) } : {}),
-    signal: AbortSignal.timeout(15000),
+    body: tokens.jweToken,
+    signal: AbortSignal.timeout(20000),
   });
-  const data = await response.json().catch(() => ({})) as T;
+  const text = await response.text();
+  let data: T = {} as T;
+  if (text) {
+    try {
+      data = JSON.parse(text) as T;
+    } catch {
+      throw new Error(`PayGlocal returned a non-JSON response (HTTP ${response.status}).`);
+    }
+  }
   return { ok: response.ok, status: response.status, data };
 }
 
-function normalizePhone(value: unknown) {
-  if (typeof value !== 'string' && typeof value !== 'number') return undefined;
-  const digits = String(value).replace(/\D/g, '');
-  return /^\d{10,15}$/.test(digits) ? digits : undefined;
-}
-function normalizeCountryCode(value: unknown) {
-  if (typeof value !== 'string') return undefined;
-  const country = value.trim();
-  if (/^[A-Za-z]{3}$/.test(country)) return country.toUpperCase();
-  const codes: Record<string, string> = {
-    india: 'IND', 'sri lanka': 'LKA', 'united kingdom': 'GBR', uk: 'GBR',
-    'united states': 'USA', usa: 'USA', canada: 'CAN', australia: 'AUS',
-    singapore: 'SGP', malaysia: 'MYS', maldives: 'MDV', 'united arab emirates': 'ARE', uae: 'ARE',
+function countryCode(value: unknown) {
+  if (typeof value !== 'string') return '';
+  const input = value.trim();
+  if (/^[A-Za-z]{2}$/.test(input)) return input.toUpperCase();
+  if (/^[A-Za-z]{3}$/.test(input)) return input.toUpperCase();
+  const aliases: Record<string, string> = {
+    india: 'IN', 'sri lanka': 'LK', 'united kingdom': 'GB', uk: 'GB',
+    'united states': 'US', usa: 'US', canada: 'CA', australia: 'AU',
+    singapore: 'SG', malaysia: 'MY', maldives: 'MV', 'united arab emirates': 'AE', uae: 'AE',
   };
-  return codes[country.toLowerCase()];
+  return aliases[input.toLowerCase()] ?? '';
 }
-function mapStatus(value: unknown): 'PAID' | 'FAILED' | 'PENDING' {
-  const status = String(value ?? '').toUpperCase();
-  if (status === 'SENT_FOR_CAPTURE') return 'PAID';
-  if (['ISSUER_DECLINE', 'GENERAL_DECLINE', 'CUSTOMER_CANCELLED', 'ABANDONED', 'REQUEST_ERROR', 'FAILED'].includes(status)) return 'FAILED';
-  return 'PENDING';
+
+const callingCodes: Record<string, string> = {
+  IN: '+91', LK: '+94', GB: '+44', US: '+1', CA: '+1', AU: '+61',
+  SG: '+65', MY: '+60', MV: '+960', AE: '+971',
+};
+
+function phoneParts(value: unknown, isoCountry: string) {
+  if (typeof value !== 'string' && typeof value !== 'number') return null;
+  const input = String(value).trim();
+  const digits = input.replace(/\D/g, '');
+  const callingCode = callingCodes[isoCountry];
+  if (!callingCode) return null;
+  const prefixDigits = callingCode.slice(1);
+  const phoneNumber = input.startsWith('+') && digits.startsWith(prefixDigits)
+    ? digits.slice(prefixDigits.length)
+    : digits.length > 10 && digits.startsWith(prefixDigits)
+      ? digits.slice(prefixDigits.length)
+      : digits;
+  return /^\d{6,14}$/.test(phoneNumber) ? { callingCode, phoneNumber } : null;
 }
-async function reconcile(orderId: string, result: GatewayStatus) {
-  const payment = await Payment.findOne({ orderId });
-  if (!payment) return null;
-  const status = mapStatus(result.status ?? result.data?.status);
-  const set: Record<string, unknown> = { rawStatus: String(result.status ?? 'INPROGRESS') };
-  // A paid record is terminal; duplicate or late callbacks cannot downgrade it.
-  if (payment.status !== 'PAID') {
-    set.status = status;
-    if (status === 'PAID') set.paymentDate = new Date();
-  }
-  if (typeof result.gid === 'string') set.payglocalGid = result.gid;
-  await Payment.updateOne({ orderId, status: { $ne: 'PAID' } }, { $set: set });
-  return { ...result, status: payment.status === 'PAID' ? 'SENT_FOR_CAPTURE' : result.status };
+
+function splitName(value: string) {
+  const pieces = value.trim().split(/\s+/);
+  return { firstName: pieces.shift() || '', lastName: pieces.join(' ') || 'Customer' };
+}
+
+function validHttpsUrl(value: string) {
+  try { return new URL(value).protocol === 'https:'; } catch { return false; }
 }
 
 export async function createPaymentOrder(req: Request, res: Response) {
+  let orderId = '';
   try {
     const body = (req.body ?? {}) as Record<string, unknown>;
     const amount = Number(body.amount);
     if (!Number.isFinite(amount) || amount < 1 || amount > 10000000 || Math.round(amount * 100) !== amount * 100) {
       return res.status(400).json({ message: 'Enter a valid amount.' });
     }
-    const currency = typeof body.currency === 'string' && /^[A-Za-z]{3}$/.test(body.currency) ? body.currency.toUpperCase() : 'INR';
-    const phone = normalizePhone(body.customerPhone);
-    if (!phone) return res.status(400).json({ message: 'Enter a valid mobile number.' });
+    // PayCollect supports merchant-enabled currencies. Do not silently change the currency requested by checkout.
+    const currency = typeof body.currency === 'string' && /^[A-Za-z]{3}$/.test(body.currency)
+      ? body.currency.toUpperCase() : 'INR';
     const name = typeof body.customerName === 'string' ? body.customerName.trim().slice(0, 100) : '';
     const email = typeof body.customerEmail === 'string' ? body.customerEmail.trim().toLowerCase().slice(0, 254) : '';
-    if (name.length < 2 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return res.status(400).json({ message: 'Enter valid customer details.' });
-    const callbackUrl = process.env.PAYGLOCAL_CALLBACK_URL?.trim();
-    if (!callbackUrl || !callbackUrl.startsWith('https://')) throw new Error('PAYGLOCAL_CALLBACK_URL must be a public HTTPS URL.');
+    const country = typeof body.country === 'string' ? body.country.trim().slice(0, 80) : '';
+    const isoCountry = countryCode(country);
+    const phone = phoneParts(body.customerPhone, isoCountry);
+    if (name.length < 2 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || !phone || !isoCountry) {
+      return res.status(400).json({ message: 'Enter a valid name, email, phone number, and country.' });
+    }
 
-    const orderId = `SFE${randomBytes(16).toString('hex')}`;
-    const payment = await Payment.create({ orderId, customerName: name, customerEmail: email, customerPhone: phone,
-      country: typeof body.country === 'string' ? body.country.trim().slice(0, 80) : undefined, amount, currency, status: 'PENDING', rawStatus: 'CREATED' });
-    const payload = {
-      merchantUniqueId: orderId,
+    const callbackUrl = required('PAYGLOCAL_CALLBACK_URL');
+    if (!validHttpsUrl(callbackUrl)) throw new Error('PAYGLOCAL_CALLBACK_URL must be a public HTTPS URL.');
+    // Validate required credential configuration before storing a new order.
+    config();
+
+    orderId = `SFE${randomBytes(16).toString('hex')}`;
+    const payment = await Payment.create({
+      orderId, customerName: name, customerEmail: email,
+      customerPhone: `${phone.callingCode}${phone.phoneNumber}`, country,
+      amount, currency, status: 'PENDING', rawStatus: 'CREATED',
+    });
+    const { firstName, lastName } = splitName(name);
+    const payload: Record<string, unknown> = {
       merchantTxnId: orderId,
-      paymentData: { totalAmount: amount.toFixed(2), txnCurrency: currency },
-      riskData: { billingData: { firstName: name.split(/\s+/)[0], lastName: name.split(/\s+/).slice(1).join(' ') || name,
-        emailId: email, ...(normalizeCountryCode(body.country) ? { addressCountry: normalizeCountryCode(body.country) } : {}) } },
+      paymentData: {
+        totalAmount: amount.toFixed(2),
+        txnCurrency: currency,
+        billingData: {
+          firstName,
+          lastName,
+          emailId: email,
+          addressCountry: isoCountry,
+          callingCode: phone.callingCode,
+          phoneNumber: phone.phoneNumber,
+        },
+      },
       merchantCallbackURL: callbackUrl,
     };
-    const result = await gatewayRequest<GatewayStatus>(PAYCOLLECT_PATH, 'POST', payload);
+    const result = await gatewayRequest<PaymentResult>(`${API_PATH}/initiate/paycollect`, payload);
     if (!result.ok) {
       await Payment.updateOne({ orderId, status: { $ne: 'PAID' } }, { $set: { status: 'FAILED', rawStatus: `INITIATE_HTTP_${result.status}` } });
-      console.error('PayGlocal initiation rejected', { orderId, httpStatus: result.status });
+      console.error('PayGlocal initiation rejected', { orderId, httpStatus: result.status, response: result.data });
       return res.status(502).json({ message: 'Unable to start payment with PayGlocal.' });
     }
-    const redirectUrl = typeof result.data.data?.redirectUrl === 'string' ? result.data.data.redirectUrl : '';
-    const gid = typeof result.data.gid === 'string' ? result.data.gid : '';
-    if (!redirectUrl || !gid || new URL(redirectUrl).protocol !== 'https:') throw new Error('PayGlocal returned an invalid checkout response.');
+
+    const nested = result.data.data && typeof result.data.data === 'object'
+      ? result.data.data as Record<string, unknown> : {};
+    const redirectUrl = String(nested.redirectUrl ?? result.data.redirectUrl ?? '');
+    const gid = String(result.data.gid ?? nested.gid ?? '');
+    if (!redirectUrl || !gid || !validHttpsUrl(redirectUrl)) {
+      throw new Error('PayGlocal returned an invalid hosted checkout response.');
+    }
     await Payment.updateOne({ orderId }, { $set: { payglocalGid: gid, rawStatus: String(result.data.status ?? 'INPROGRESS') } });
-    console.info('PayGlocal checkout created', { orderId, gid });
     return res.status(201).json({ orderId, redirectUrl, status: 'PENDING', amount, currency });
   } catch (error) {
-    console.error('PayGlocal initiation failed', { message: error instanceof Error ? error.message : 'unknown error' });
+    console.error('PayGlocal initiation failed', { orderId: orderId || undefined, message: error instanceof Error ? error.message : 'unknown error' });
     return res.status(502).json({ message: 'Unable to start payment. Please try again.' });
   }
 }
@@ -187,69 +260,50 @@ export async function createPaymentOrder(req: Request, res: Response) {
 export async function getPaymentStatus(req: Request, res: Response) {
   try {
     const orderId = String(req.params.orderId ?? '').trim();
-    if (!/^[A-Za-z0-9]{4,50}$/.test(orderId)) return res.status(400).json({ message: 'Invalid order id.' });
+    if (!/^SFE[A-Fa-f0-9]{32}$/.test(orderId)) return res.status(400).json({ message: 'Invalid order id.' });
     const payment = await Payment.findOne({ orderId });
     if (!payment) return res.status(404).json({ message: 'Order not found.' });
-    if (payment.status !== 'PAID') {
-      const result = await gatewayRequest<GatewayStatus>(`${API_PATH}/${encodeURIComponent(payment.payglocalGid || orderId)}/status`, 'GET');
-      if (!result.ok) return res.status(502).json({ message: 'Unable to verify payment status with PayGlocal.' });
-      const rawAmount = result.data.data?.Amount ?? result.data.data?.amount;
-      const rawCurrency = result.data.data?.txnCurrency ?? result.data.data?.Currency;
-      if (rawAmount == null || rawCurrency == null) {
-        return res.status(502).json({ message: 'PayGlocal returned incomplete payment details.' });
-      }
-      const reportedAmount = Number(rawAmount);
-      const reportedCurrency = String(rawCurrency).toUpperCase();
-      if (Math.abs(reportedAmount - payment.amount) > 0.01 || reportedCurrency !== payment.currency) {
-        console.error('PayGlocal status amount mismatch', { orderId, gid: payment.payglocalGid });
-        return res.status(409).json({ message: 'Payment details did not match this order.' });
-      }
-      await reconcile(orderId, result.data);
-    }
-    const current = await Payment.findOne({ orderId });
-    return res.json({ orderId, status: current?.status ?? 'PENDING', amount: current?.amount, currency: current?.currency, rawStatus: current?.rawStatus });
+
+    // Browser return is not proof of payment. Reconcile from the verified callback/webhook first;
+    // optional status lookup can be enabled/configured with PayGlocal if the merchant endpoint is confirmed.
+    return res.json({ orderId, status: payment.status === 'CREATED' ? 'PENDING' : payment.status,
+      amount: payment.amount, currency: payment.currency, rawStatus: payment.rawStatus });
   } catch (error) {
-    console.error('PayGlocal status verification failed', { message: error instanceof Error ? error.message : 'unknown error' });
-    return res.status(502).json({ message: 'Unable to verify payment status.' });
+    console.error('PayGlocal status lookup failed', { message: error instanceof Error ? error.message : 'unknown error' });
+    return res.status(500).json({ message: 'Unable to verify payment status.' });
   }
 }
 
 export async function paymentCallback(req: Request, res: Response) {
   try {
-    const token = (req.body as Record<string, unknown> | undefined)?.['x-gl-token'];
-    if (typeof token !== 'string') return res.status(400).send('Missing payment token.');
-    const parts = token.split('.');
-    if (parts.length !== 3) return res.status(400).send('Invalid payment token.');
-    // Callback fields only identify the order; payment state is confirmed server-to-server below.
-    const callback = verifyCallbackToken(token);
-    if (!callback) return res.status(401).send('Invalid payment signature.');
-    const orderId = typeof callback.merchantTxnId === 'string' ? callback.merchantTxnId : '';
-    if (!/^[A-Za-z0-9]{4,50}$/.test(orderId)) return res.status(400).send('Invalid transaction reference.');
-    const payment = await Payment.findOne({ orderId });
+    const result = decodeToken(responseToken(req));
+    if (!result) return res.status(401).send('Invalid payment signature.');
+    const payment = await updatePaymentFromVerifiedResult(result);
     if (!payment) return res.status(404).send('Order not found.');
-    const { mid } = config();
-    const callbackMerchantId = String(callback.merchantId ?? callback['x-gl-merchantId'] ?? '');
-    if (callbackMerchantId !== mid) return res.status(401).send('Merchant mismatch.');
-    const callbackAmount = Number(callback.amount);
-    const callbackCurrency = String(callback.currency ?? '').toUpperCase();
-    if (!Number.isFinite(callbackAmount) || !callbackCurrency || Math.abs(callbackAmount - payment.amount) > 0.01 ||
-        callbackCurrency !== payment.currency) return res.status(409).send('Payment details mismatch.');
-    if (payment.status !== 'PAID') {
-      const result = await gatewayRequest<GatewayStatus>(`${API_PATH}/${encodeURIComponent(payment.payglocalGid || orderId)}/status`, 'GET');
-      if (result.ok) {
-        const rawAmount = result.data.data?.Amount ?? result.data.data?.amount;
-        const rawCurrency = result.data.data?.txnCurrency ?? result.data.data?.Currency;
-        if (rawAmount != null && rawCurrency != null &&
-            Math.abs(Number(rawAmount) - payment.amount) <= 0.01 && String(rawCurrency).toUpperCase() === payment.currency) {
-          await reconcile(orderId, result.data);
-        }
-      }
-    }
     const clientUrl = (process.env.CLIENT_URL || '').split(',')[0].trim();
-    if (!clientUrl) return res.status(200).send('Payment received. You may return to the website.');
-    return res.redirect(303, `${clientUrl.replace(/\/$/, '')}/checkout?order_id=${encodeURIComponent(orderId)}`);
+    if (!clientUrl) return res.status(200).send('Payment response received.');
+    return res.redirect(303, `${clientUrl.replace(/\/$/, '')}/checkout?order_id=${encodeURIComponent(payment.orderId)}`);
   } catch (error) {
-    console.error('PayGlocal callback processing failed', { message: error instanceof Error ? error.message : 'unknown error' });
-    return res.status(500).send('Unable to process payment callback.');
+    console.error('PayGlocal callback failed', { message: error instanceof Error ? error.message : 'unknown error' });
+    return res.status(400).send('Unable to process payment response.');
   }
+}
+
+export async function paymentWebhook(req: Request, res: Response) {
+  // Acknowledge promptly. The public webhook guide shows unsigned JSON but does not
+  // document a verification mechanism; never update payment records from unsigned data.
+  res.status(200).json({ received: true });
+  const token = responseToken(req);
+  if (!token) {
+    console.error('PayGlocal webhook received without a signed x-gl-token; no payment state changed');
+    return;
+  }
+  const event = decodeToken(token);
+  if (!event) {
+    console.error('PayGlocal webhook could not be verified or parsed');
+    return;
+  }
+  void updatePaymentFromVerifiedResult(event).catch((error) => {
+    console.error('PayGlocal webhook reconciliation failed', { message: error instanceof Error ? error.message : 'unknown error' });
+  });
 }

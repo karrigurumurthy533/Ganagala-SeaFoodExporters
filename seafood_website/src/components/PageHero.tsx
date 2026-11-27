@@ -1,4 +1,4 @@
-﻿import type { ReactNode } from "react";
+import type { ReactNode } from "react";
 import { ArrowRight } from "lucide-react";
 import { Link } from "react-router-dom";
 
@@ -49,13 +49,23 @@ export default function PageHero({
           </p>
           {children}
           {action && (
-            <Link
-              to={to}
-              className={`mt-3 inline-flex items-center gap-2 rounded-full bg-ocean-900 px-4 py-2 text-[10px] font-bold text-white shadow-md shadow-ocean-900/15 transition hover:bg-sky-600 lg:mt-5 lg:px-5 lg:py-2.5 lg:text-xs`}
-            >
-              {action}
-              <ArrowRight size={13} />
-            </Link>
+            <>
+              <Link
+                to={to}
+                className={`mt-3 inline-flex items-center gap-2 rounded-full bg-ocean-900 px-4 py-2 text-[10px] font-bold text-white shadow-md shadow-ocean-900/15 transition hover:bg-sky-600 lg:mt-5 lg:px-5 lg:py-2.5 lg:text-xs ${to === "/products" ? "max-[679px]:h-9 max-[679px]:w-[190px] max-[679px]:justify-center" : ""}`}
+              >
+                {action}
+                <ArrowRight size={13} />
+              </Link>
+              {to === "/products" && (
+                <Link
+                  to="/checkout"
+                  className="mt-2 flex h-9 w-[190px] items-center justify-center gap-2 rounded-full border border-ocean-900 px-4 py-2 text-[10px] font-bold text-ocean-950 transition hover:bg-ocean-900 hover:text-white min-[680px]:hidden"
+                >
+                  Checkout <ArrowRight size={13} />
+                </Link>
+              )}
+            </>
           )}
         </div>
       </div>

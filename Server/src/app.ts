@@ -3,6 +3,7 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 import connectDB from './db.js';
 import paymentRoutes from './routes/paymentRoutes.js';
+import { logError } from './utils/errorLogger.js';
 
 dotenv.config();
 
@@ -28,13 +29,13 @@ app.get('/health', (_req, res) => res.json({ status: 'ok' }));
 app.use('/api/payments', paymentRoutes);
 app.use((_req, res) => res.status(404).json({ message: 'Not found' }));
 app.use((error: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
-  console.error('Request failed:', error);
+  logError('Request failed', error, { method: _req.method, path: _req.originalUrl });
   res.status(500).json({ message: 'Internal server error' });
 });
 const port = Number(process.env.PORT || 5000);
 if (process.env.NODE_ENV !== 'test') {
   connectDB().then(() => app.listen(port, () => console.log(`Server listening on ${port}`))).catch((error: unknown) => {
-    console.error('Database connection failed:', error);
+    logError('Database connection failed', error);
     process.exit(1);
   });
 }

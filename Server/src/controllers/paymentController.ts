@@ -2,6 +2,7 @@ import type { Request, Response } from 'express';
 import { createHash, createPublicKey, createSign, createVerify, randomBytes, X509Certificate } from 'node:crypto';
 import { createRequire } from 'node:module';
 import Payment from '../models/Payment.js';
+import { logError } from '../utils/errorLogger.js';
 
 // PayGlocal's official Node SDK creates the encrypted JWE and signed JWS.
 const require = createRequire(import.meta.url);
@@ -341,7 +342,7 @@ export async function createPaymentOrder(req: Request, res: Response) {
     await Payment.updateOne({ orderId }, { $set: update });
     return res.status(201).json({ orderId, redirectUrl, status: 'PENDING', amount, currency });
   } catch (error) {
-    console.error('PayGlocal initiation failed', { orderId: orderId || undefined, message: error instanceof Error ? error.message : 'unknown error' });
+    logError('PayGlocal initiation failed', error, { orderId: orderId || undefined });
     return res.status(502).json({ message: 'Unable to start payment. Please try again.' });
   }
 }
@@ -407,10 +408,7 @@ export async function getPaymentStatus(req: Request, res: Response) {
           });
         }
       } catch (error) {
-        console.warn('PayGlocal status check failed', {
-          orderId,
-          message: error instanceof Error ? error.message : 'unknown error',
-        });
+        logError('PayGlocal status check failed', error, { orderId });
       }
     }
 
@@ -419,7 +417,7 @@ export async function getPaymentStatus(req: Request, res: Response) {
     return res.json({ orderId, status: currentPayment.status === 'CREATED' ? 'PENDING' : currentPayment.status,
       amount: currentPayment.amount, currency: currentPayment.currency, rawStatus: currentPayment.rawStatus });
   } catch (error) {
-    console.error('PayGlocal status lookup failed', { message: error instanceof Error ? error.message : 'unknown error' });
+    logError('PayGlocal status lookup failed', error);
     return res.status(500).json({ message: 'Unable to verify payment status.' });
   }
 }
@@ -449,7 +447,7 @@ export async function paymentCallback(req: Request, res: Response) {
     }
     return res.redirect(303, checkoutReturnUrl({ order_id: payment.orderId }));
   } catch (error) {
-    console.error('PayGlocal callback failed', { message: error instanceof Error ? error.message : 'unknown error' });
+    logError('PayGlocal callback failed', error);
     const orderId = callbackOrderId(req);
     return res.redirect(303, checkoutReturnUrl(orderId
       ? { order_id: orderId, payment: 'verification_failed' }

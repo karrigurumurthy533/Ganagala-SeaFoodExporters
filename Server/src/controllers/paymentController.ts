@@ -234,20 +234,21 @@ function validHttpsUrl(value: string) {
   try { return new URL(value).protocol === 'https:'; } catch { return false; }
 }
 
-function createStatusToken(settings: ReturnType<typeof config>) {
-  // The status endpoint is a GET with no body. PayGlocal's JWS format signs
-  // the SHA-256 digest of the request body (the empty string for this request).
+function createStatusToken(settings: ReturnType<typeof config>, requestPath: string) {
+  // For GET requests PayGlocal requires the URI path, including any query
+  // string, to be signed. POST and PUT requests sign their raw request body.
   const now = Date.now();
   const encode = (value: unknown) => Buffer.from(JSON.stringify(value)).toString('base64url');
   const header = encode({
     alg: 'RS256',
     kid: settings.privateKeyId,
-    iss: settings.merchantId,
-    'x-gl-enc': 'false',
+    'x-gl-merchantId': settings.merchantId,
+    'issued-by': settings.merchantId,
+    'x-gl-enc': 'true',
     'is-digested': 'true',
   });
   const payload = encode({
-    digest: createHash('sha256').update('').digest('base64'),
+    digest: createHash('sha256').update(requestPath).digest('base64'),
     digestAlgorithm: 'SHA-256',
     exp: 300000,
     iat: String(now),
@@ -355,13 +356,14 @@ export async function getPaymentStatus(req: Request, res: Response) {
     if (payment.status === 'PENDING' && payment.payglocalGid) {
       try {
         const settings = config();
-        const statusToken = createStatusToken(settings);
-        const response = await fetch(`${settings.baseUrl}${API_PATH}/${encodeURIComponent(payment.payglocalGid)}/status`, {
+        const requestPath = `${API_PATH}/${encodeURIComponent(payment.payglocalGid)}/status`;
+        const statusToken = createStatusToken(settings, requestPath);
+        const response = await fetch(`${settings.baseUrl}${requestPath}`, {
           method: 'GET',
           headers: {
             Accept: 'application/json',
             'x-gl-token-external': statusToken,
-            'x-gl-merchantid': settings.merchantId,
+            'x-gl-merchantId': settings.merchantId,
             'x-gl-kid': settings.privateKeyId,
           },
           signal: AbortSignal.timeout(10000),

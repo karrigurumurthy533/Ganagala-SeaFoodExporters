@@ -1,19 +1,23 @@
-# Cashfree Payments
+﻿# PayGlocal PayCollect
 
-The payment flow is integrated into the existing React/Vite site and TypeScript/Express API. It uses Cashfree Hosted Checkout; card number, expiry, and CVV are handled only by Cashfree.
+The checkout uses PayGlocal hosted PayCollect. Card and UPI credentials are entered on PayGlocal and never pass through this site.
 
-## Environment
+## UAT configuration
 
-Copy `.env.example` to `.env` and configure MongoDB, Cashfree credentials, `CASHFREE_ENV`, `CASHFREE_MERCHANT_PHONE`, and `CLIENT_URL`. For the production site, use `CLIENT_URL=https://ganagalaseafoodexporters.com`. The merchant phone is sent to Cashfree because its Create Order API requires `customer_phone`; it is not collected from the website form or saved in MongoDB.
+Copy `.env.example` to `.env` on the server and configure `MONGODB_URI`, `CLIENT_URL`, `PAYGLOCAL_ENV=uat`, `PAYGLOCAL_MERCHANT_ID`, `PAYGLOCAL_PRIVATE_KEY_ID`, `PAYGLOCAL_PRIVATE_KEY`, `PAYGLOCAL_PUBLIC_KEY_ID`, `PAYGLOCAL_PUBLIC_KEY`, `PAYGLOCAL_PUBLIC_CERT`, and `PAYGLOCAL_CALLBACK_URL`. Use matching UAT MID/key material from the UAT GCC. The callback must be a public HTTPS URL ending in `/api/payments/callback`. Never put gateway secrets in the Vite frontend environment or commit `.env`.
 
-Use sandbox credentials with `CASHFREE_ENV=sandbox` for testing. For live use production credentials and `CASHFREE_ENV=production`. The backend selects the corresponding Cashfree API host and returns its mode to the frontend, ensuring checkout is initialized in the matching environment.
+The initiate request uses PayGlocal's official `payglocal-js-client` to encrypt the transaction JSON as a JWE using PayGlocal's public key and to sign its digest as a JWS using the merchant private key. The encrypted token is sent as the JSON request body and the JWS is sent in `x-gl-token-external`. The server verifies callback signatures with PayGlocal's public certificate. Ask PayGlocal support for the UAT MID, merchant private key/KID, PayGlocal encryption public key/KID, and callback verification certificate if any are missing.
 
-## Start
+## Flow
 
-From `Server`, run `npm install` and `npm run dev` during development, or `npm start` for the compiled server. From `seafood_website`, run `npm install` and `npm run dev`. The Vite proxy to `http://localhost:5000` is only for local development; production payment returns to the URL in `CLIENT_URL`.
+`POST /api/payments/orders` creates a random merchant transaction ID and a pending MongoDB payment, starts PayCollect, and returns the hosted `redirectUrl`. The browser navigates to that URL. PayGlocal posts `x-gl-token` to the callback endpoint; the callback verifies the signature, checks the order details, and the server then fetches status from PayGlocal before reconciling. `GET /api/payments/orders/:orderId` also polls PayGlocal and reconciles `PAID`, `FAILED`, and `PENDING` states. A conditional MongoDB update prevents duplicate callbacks from downgrading a paid payment.
 
-## Payment and verification
+Only `SENT_FOR_CAPTURE` is treated as paid. `AUTHORIZED` remains pending. Declines, abandonment, cancellation, and request errors are failed. Callback data alone is never treated as payment confirmation.
 
-`POST /api/payments/orders` creates a unique Cashfree order and returns `paymentSessionId` and `cashfreeMode`. The frontend validates the session and passes that exact ID to Cashfree Checkout. `GET /api/payments/orders/:orderId` and the signed webhook reconcile payment status with Cashfree. MongoDB is marked `PAID` only when Cashfree confirms the order is `PAID` and a successful payment attempt matches the stored amount and currency. Card data is never stored.
+## Routes
 
-Configure Cashfree webhook events at `https://ganagalaseafoodexporters.com/api/payments/webhook`. Use HTTPS and whitelist the production website domain in the Cashfree dashboard. Enable card payments in the merchant dashboard.
+- `POST /api/payments/orders`
+- `POST /api/payments/callback` (PayGlocal callback)
+- `GET /api/payments/orders/:orderId`
+
+Use PayGlocal UAT test payment methods/cards from the merchant dashboard for end-to-end UAT. Switch to production only with production credentials and a production-approved MID.

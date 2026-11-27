@@ -6,16 +6,23 @@ import paymentRoutes from './routes/paymentRoutes.js';
 
 dotenv.config();
 
-console.log({
-  appIdLoaded: !!process.env.CASHFREE_APP_ID,
-  secretLoaded: !!process.env.CASHFREE_SECRET_KEY,
-  environment: process.env.CASHFREE_ENV,
-  appIdLength: process.env.CASHFREE_APP_ID?.trim().length,
-});
 const app = express();
-const allowedOrigins = (process.env.CLIENT_URL || 'https://ganagalaseafoodexporters.com').split(',').map((value) => value.trim()).filter(Boolean);
-app.use(cors({ origin: allowedOrigins }));
+const configuredOrigins = (process.env.CLIENT_URL || 'https://ganagalaseafoodexporters.com').split(',').map((value) => value.trim()).filter(Boolean);
+app.use(cors({
+  origin(origin, callback) {
+    if (!origin || configuredOrigins.includes(origin)) return callback(null, true);
+    try {
+      const parsed = new URL(origin);
+      const isLocalDevelopmentOrigin = parsed.protocol === 'http:' &&
+        ['localhost', '127.0.0.1', '[::1]'].includes(parsed.hostname);
+      return callback(null, isLocalDevelopmentOrigin);
+    } catch {
+      return callback(null, false);
+    }
+  },
+}));
 app.use(express.json({ limit: '32kb' }));
+app.use(express.urlencoded({ extended: false, limit: '32kb' }));
 app.get('/health', (_req, res) => res.json({ status: 'ok' }));
 app.use('/api/payments', paymentRoutes);
 app.use((_req, res) => res.status(404).json({ message: 'Not found' }));
